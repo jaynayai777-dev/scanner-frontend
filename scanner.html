@@ -119,18 +119,18 @@
 <body>
 <div class="container">
     <h1>SEO Audit Scanner</h1>
-    <p class="subtitle">Enter a URL and watch the audit generate in real time.</p>
+    <p class="subtitle">Enter a URL to trigger the analytics workflow.</p>
 
     <input id="urlInput" type="text" placeholder="https://example.com" />
 
-    <button onclick="startAudit()">Run Audit</button>
+    <button onclick="sendToN8N()">Run Audit</button>
 
-    <div id="loading" class="loading">Preparing audit…</div>
+    <div id="loading" class="loading">Preparing…</div>
     <div id="result" class="result"></div>
 </div>
 
 <script>
-async function startAudit() {
+async function sendToN8N() {
     const url = document.getElementById("urlInput").value.trim();
     const loading = document.getElementById("loading");
     const result = document.getElementById("result");
@@ -147,58 +147,25 @@ async function startAudit() {
     }
 
     try {
-        // 1. Start async job
         const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sections: { url } })
+            body: JSON.stringify({ url })
         });
 
-        const data = await response.json();
-        const jobId = data.job_id;
+        if (!response.ok) {
+            throw new Error("n8n returned an error");
+        }
 
-        loading.textContent = "Audit started…";
-
-        // 2. Begin SSE stream
-        streamAudit(jobId);
+        loading.style.display = "none";
+        result.style.display = "block";
+        result.textContent = "Analytics workflow triggered successfully.";
 
     } catch (err) {
         loading.style.display = "none";
         result.style.display = "block";
         result.textContent = "Error:\n" + err.message;
     }
-}
-
-function streamAudit(jobId) {
-    const loading = document.getElementById("loading");
-    const result = document.getElementById("result");
-
-    const streamUrl = `https://portions-proudly-louisville-pan.trycloudflare.com/generate_stream?job_id=${jobId}`;
-    const source = new EventSource(streamUrl);
-
-    source.addEventListener("start", () => {
-        loading.textContent = "Audit initializing…";
-    });
-
-    source.addEventListener("progress", (event) => {
-        const data = JSON.parse(event.data);
-        loading.textContent = `Processing… Status: ${data.status}`;
-    });
-
-    source.addEventListener("complete", (event) => {
-        const data = JSON.parse(event.data);
-        loading.style.display = "none";
-        result.style.display = "block";
-        result.textContent = JSON.stringify(data, null, 2);
-        source.close();
-    });
-
-    source.addEventListener("error", () => {
-        loading.style.display = "none";
-        result.style.display = "block";
-        result.textContent = "Stream error or connection closed.";
-        source.close();
-    });
 }
 </script>
 
