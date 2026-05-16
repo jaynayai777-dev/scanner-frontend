@@ -1,84 +1,271 @@
-<script>
-async function sendToN8N() {
-    const url = document.getElementById("urlInput").value.trim();
-    const loading = document.getElementById("loading");
-    const result = document.getElementById("result");
-
-    result.style.display = "none";
-    loading.style.display = "block";
-    loading.textContent = "Submitting URL…";
-
-    if (!url) {
-        loading.style.display = "none";
-        result.style.display = "block";
-        result.textContent = "Please enter a valid URL.";
-        return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SEO Audit Draft Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b1020;
+      color: #f5f5f5;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
     }
+    .container {
+      max-width: 900px;
+      width: 100%;
+      padding: 32px 20px 48px;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.8rem;
+      margin-bottom: 0.5rem;
+    }
+    p.subtitle {
+      margin-top: 0;
+      margin-bottom: 1.5rem;
+      color: #c3c7e0;
+      font-size: 0.95rem;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    #urlInput {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid #2b3250;
+      background: #11162a;
+      color: #f5f5f5;
+      font-size: 0.95rem;
+    }
+    #urlInput::placeholder {
+      color: #6f7695;
+    }
+    button {
+      padding: 10px 16px;
+      border-radius: 6px;
+      border: none;
+      background: #4f46e5;
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #loading {
+      font-size: 0.9rem;
+      color: #e5e7ff;
+      margin-bottom: 10px;
+      min-height: 1.2em;
+      white-space: pre-line;
+    }
+    #result {
+      background: #050816;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-family: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.85rem;
+      color: #e5e7ff;
+      max-height: 60vh;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid #1f2937;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(79, 70, 229, 0.12);
+      color: #c7d2fe;
+      font-size: 0.75rem;
+      margin-bottom: 8px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #22c55e;
+      animation: pulse 1.4s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.4; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>SEO Audit Draft Generator</h1>
+    <p class="subtitle">
+      Paste a URL, send it to n8n, and stream the draft audit from your Colab backend.
+    </p>
 
-    try {
-        // 1. Trigger n8n (which triggers Colab and returns job_id + backend_url)
-        const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
+    <div class="input-row">
+      <input
+        id="urlInput"
+        type="url"
+        placeholder="https://example.com"
+        autocomplete="off"
+      />
+      <button id="runButton" onclick="sendToN8N()">Run Audit</button>
+    </div>
+
+    <div id="loading"></div>
+
+    <div class="status-chip" id="statusChip" style="display:none;">
+      <span class="status-dot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+
+    <pre id="result" style="display:none;"></pre>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const urlInput = document.getElementById("urlInput");
+      const loading = document.getElementById("loading");
+      const result = document.getElementById("result");
+      const runButton = document.getElementById("runButton");
+      const statusChip = document.getElementById("statusChip");
+      const statusText = document.getElementById("statusText");
+
+      async function sendToN8N() {
+        const url = urlInput.value.trim();
+        result.style.display = "none";
+        result.textContent = "";
+        loading.textContent = "";
+        statusChip.style.display = "none";
+        statusText.textContent = "";
+        runButton.disabled = true;
+
+        if (!url) {
+          loading.textContent = "";
+          result.style.display = "block";
+          result.textContent = "Please enter a valid URL.";
+          runButton.disabled = false;
+          return;
+        }
+
+        loading.textContent = "Submitting URL…";
+
+        try {
+          const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url })
+          });
+
+          if (!response.ok) {
+            throw new Error("n8n returned an error (HTTP " + response.status + ")");
+          }
+
+          const data = await response.json();
+          const jobId = data.job_id;
+          const colabUrl = data.backend_url;
+
+          if (!jobId || !colabUrl) {
+            throw new Error("Missing job ID or backend URL from n8n.");
+          }
+
+          loading.textContent = "Audit started…";
+          statusChip.style.display = "inline-flex";
+          statusText.textContent = "Waiting for draft stream…";
+
+          streamAudit(jobId, colabUrl);
+        } catch (err) {
+          loading.textContent = "";
+          result.style.display = "block";
+          result.textContent = "Error:\n" + (err.message || String(err));
+          runButton.disabled = false;
+        }
+      }
+
+      function streamAudit(jobId, colabUrl) {
+        const streamUrl = `${colabUrl.replace(/\/+$/, "")}/generate_stream?job_id=${encodeURIComponent(jobId)}`;
+
+        result.style.display = "block";
+        result.textContent = "";
+        loading.textContent = "Connecting to audit stream…";
+
+        let source;
+        try {
+          source = new EventSource(streamUrl);
+        } catch (e) {
+          loading.textContent = "";
+          result.textContent = "Error opening stream:\n" + (e.message || String(e));
+          runButton.disabled = false;
+          return;
+        }
+
+        source.addEventListener("open", () => {
+          statusText.textContent = "Connected to draft stream…";
         });
 
-        if (!response.ok) {
-            throw new Error("n8n returned an error");
-        }
+        source.addEventListener("start", () => {
+          loading.textContent = "Audit initializing…";
+          statusText.textContent = "Initializing…";
+        });
 
-        const data = await response.json();
-        const jobId = data.job_id;
-        const colabUrl = data.backend_url;   // <-- FIXED
+        source.addEventListener("progress", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
+            statusText.textContent = `Processing: ${data.status || "in progress"}`;
+          } catch {
+            // ignore malformed progress chunks
+          }
+        });
 
-        if (!jobId || !colabUrl) {
-            throw new Error("Missing job ID or backend URL from n8n.");
-        }
+        // assuming your backend sends a "complete" event with the full draft
+        source.addEventListener("complete", (event) => {
+          loading.textContent = "";
+          statusText.textContent = "Draft complete";
+          runButton.disabled = false;
 
-        loading.textContent = "Audit started…";
+          try {
+            const data = JSON.parse(event.data);
+            result.textContent = JSON.stringify(data, null, 2);
+          } catch {
+            result.textContent = event.data || "[Received complete event with non‑JSON payload]";
+          }
 
-        // 2. Start streaming from Colab using the job ID
-        streamAudit(jobId, colabUrl);
+          source.close();
+        });
 
-    } catch (err) {
-        loading.style.display = "none";
-        result.style.display = "block";
-        result.textContent = "Error:\n" + err.message;
-    }
-}
+        source.addEventListener("error", (event) => {
+          // EventSource fires "error" on normal close in some environments; be graceful
+          loading.textContent = "";
+          runButton.disabled = false;
 
-function streamAudit(jobId, colabUrl) {
-    const loading = document.getElementById("loading");
-    const result = document.getElementById("result");
+          if (source.readyState === EventSource.CLOSED) {
+            statusText.textContent = "Stream closed";
+          } else {
+            statusText.textContent = "Stream error";
+            result.textContent += "\n\n[Stream error or connection closed]";
+          }
 
-    result.style.display = "block";
-    result.textContent = "";
-    loading.textContent = "Connecting to audit stream…";
+          source.close();
+        });
+      }
 
-    const streamUrl = `${colabUrl}/generate_stream?job_id=${jobId}`;
-    const source = new EventSource(streamUrl);
-
-    source.addEventListener("start", () => {
-        loading.textContent = "Audit initializing…";
+      // expose globally for the button
+      window.sendToN8N = sendToN8N;
     });
-
-    source.addEventListener("progress", (event) => {
-        const data = JSON.parse(event.data);
-        loading.textContent = `Processing… Status: ${data.status}`;
-    });
-
-    source.addEventListener("complete", (event) => {
-        const data = JSON.parse(event.data);
-        loading.style.display = "none";
-
-        result.textContent = JSON.stringify(data, null, 2);
-        source.close();
-    });
-
-    source.addEventListener("error", () => {
-        loading.style.display = "none";
-        result.textContent += "\n\n[Stream error or connection closed]";
-        source.close();
-    });
-}
-</script>
+  </script>
+</body>
+</html>
