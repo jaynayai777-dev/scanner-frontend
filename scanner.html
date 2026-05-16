@@ -4,9 +4,13 @@
   <meta charset="UTF-8" />
   <title>SEO Audit Draft Generator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Comfortaa Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;600;700&display=swap" rel="stylesheet">
+
   <style>
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "Comfortaa", sans-serif;
       background: #0b1020;
       color: #f5f5f5;
       margin: 0;
@@ -75,7 +79,7 @@
       background: #050816;
       border-radius: 8px;
       padding: 12px 14px;
-      font-family: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: "Comfortaa", monospace;
       font-size: 0.85rem;
       color: #e5e7ff;
       max-height: 60vh;
@@ -106,8 +110,31 @@
       50% { transform: scale(1.4); opacity: 0.4; }
       100% { transform: scale(1); opacity: 1; }
     }
+    a.colab-link {
+      color: #60a5fa;
+      text-decoration: underline;
+      font-weight: 600;
+    }
+
+    /* Progress Bar */
+    #progressContainer {
+      width: 100%;
+      height: 10px;
+      background: #1f2937;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 10px 0 16px;
+      display: none;
+    }
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: #4f46e5;
+      transition: width 0.25s ease-out;
+    }
   </style>
 </head>
+
 <body>
   <div class="container">
     <h1>SEO Audit Draft Generator</h1>
@@ -127,6 +154,10 @@
 
     <div id="loading"></div>
 
+    <div id="progressContainer">
+      <div id="progressBar"></div>
+    </div>
+
     <div class="status-chip" id="statusChip" style="display:none;">
       <span class="status-dot"></span>
       <span id="statusText">Connecting…</span>
@@ -143,6 +174,8 @@
       const runButton = document.getElementById("runButton");
       const statusChip = document.getElementById("statusChip");
       const statusText = document.getElementById("statusText");
+      const progressContainer = document.getElementById("progressContainer");
+      const progressBar = document.getElementById("progressBar");
 
       async function sendToN8N() {
         const url = urlInput.value.trim();
@@ -151,10 +184,11 @@
         loading.textContent = "";
         statusChip.style.display = "none";
         statusText.textContent = "";
+        progressContainer.style.display = "none";
+        progressBar.style.width = "0%";
         runButton.disabled = true;
 
         if (!url) {
-          loading.textContent = "";
           result.style.display = "block";
           result.textContent = "Please enter a valid URL.";
           runButton.disabled = false;
@@ -178,8 +212,20 @@
           const jobId = data.job_id;
           const colabUrl = data.backend_url;
 
-          if (!jobId || !colabUrl) {
-            throw new Error("Missing job ID or backend URL from n8n.");
+          // ⭐ Colab URL check
+          if (!colabUrl) {
+            loading.textContent = "";
+            result.style.display = "block";
+            result.innerHTML =
+              "Your Colab backend is offline.<br><br>" +
+              "Please launch it here:<br>" +
+              `<a class="colab-link" href="https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3" target="_blank">Open Colab Backend</a>`;
+            runButton.disabled = false;
+            return;
+          }
+
+          if (!jobId) {
+            throw new Error("Missing job ID from n8n.");
           }
 
           loading.textContent = "Audit started…";
@@ -195,12 +241,25 @@
         }
       }
 
+      function typeWriterEffect(element, text, speed = 12) {
+        let i = 0;
+        function type() {
+          if (i < text.length) {
+            element.textContent += text.charAt(i);
+            i++;
+            requestAnimationFrame(type);
+          }
+        }
+        type();
+      }
+
       function streamAudit(jobId, colabUrl) {
         const streamUrl = `${colabUrl.replace(/\/+$/, "")}/generate_stream?job_id=${encodeURIComponent(jobId)}`;
 
         result.style.display = "block";
         result.textContent = "";
         loading.textContent = "Connecting to audit stream…";
+        progressContainer.style.display = "block";
 
         let source;
         try {
@@ -219,6 +278,7 @@
         source.addEventListener("start", () => {
           loading.textContent = "Audit initializing…";
           statusText.textContent = "Initializing…";
+          progressBar.style.width = "5%";
         });
 
         source.addEventListener("progress", (event) => {
@@ -226,20 +286,23 @@
             const data = JSON.parse(event.data);
             loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
             statusText.textContent = `Processing: ${data.status || "in progress"}`;
-          } catch {
-            // ignore malformed progress chunks
-          }
+
+            // ⭐ Progress bar simulation
+            const pct = Math.min(95, progressBar.offsetWidth + 5);
+            progressBar.style.width = pct + "%";
+          } catch {}
         });
 
-        // assuming your backend sends a "complete" event with the full draft
         source.addEventListener("complete", (event) => {
           loading.textContent = "";
           statusText.textContent = "Draft complete";
           runButton.disabled = false;
+          progressBar.style.width = "100%";
 
           try {
             const data = JSON.parse(event.data);
-            result.textContent = JSON.stringify(data, null, 2);
+            result.textContent = "";
+            typeWriterEffect(result, JSON.stringify(data, null, 2));
           } catch {
             result.textContent = event.data || "[Received complete event with non‑JSON payload]";
           }
@@ -247,23 +310,15 @@
           source.close();
         });
 
-        source.addEventListener("error", (event) => {
-          // EventSource fires "error" on normal close in some environments; be graceful
+        source.addEventListener("error", () => {
           loading.textContent = "";
           runButton.disabled = false;
-
-          if (source.readyState === EventSource.CLOSED) {
-            statusText.textContent = "Stream closed";
-          } else {
-            statusText.textContent = "Stream error";
-            result.textContent += "\n\n[Stream error or connection closed]";
-          }
-
+          statusText.textContent = "Stream error";
+          result.textContent += "\n\n[Stream error or connection closed]";
           source.close();
         });
       }
 
-      // expose globally for the button
       window.sendToN8N = sendToN8N;
     });
   </script>
