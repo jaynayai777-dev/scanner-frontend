@@ -120,8 +120,6 @@
       text-decoration: underline;
       font-weight: 600;
     }
-
-    /* Progress Bar */
     #progressContainer {
       width: 100%;
       height: 10px;
@@ -180,8 +178,14 @@
       const progressContainer = document.getElementById("progressContainer");
       const progressBar = document.getElementById("progressBar");
 
+      let lastUrl = "";
+
       async function sendToN8N() {
-        const url = urlInput.value.trim();
+        let url = urlInput.value.trim();
+        if (!url && lastUrl) {
+          url = lastUrl;
+        }
+
         result.style.display = "none";
         result.textContent = "";
         loading.textContent = "";
@@ -199,7 +203,8 @@
           return;
         }
 
-        loading.textContent = "Submitting URL…";
+        lastUrl = url;
+        loading.textContent = "Submitting URL to n8n…";
 
         try {
           const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
@@ -208,23 +213,24 @@
             body: JSON.stringify({ url })
           });
 
-          /* ⭐ Friendly fallback for HTTP 500 */
           if (!response.ok) {
+            const text = await response.text().catch(() => "");
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
               "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
-              "This usually means one of your backends is offline.<br><br>" +
+              "This usually means one of your backends is offline or the workflow threw an error.<br><br>" +
               "Please check:<br>" +
-              "• Your n8n workflow<br>" +
-              `• <a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Colab Backend</a>`;
-
+              "• Your n8n workflow logs<br>" +
+              `• <a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Colab Backend</a>` +
+              (text ? "<br><br><strong>n8n response body:</strong><br><pre>" + text + "</pre>" : "");
             retryButton.style.display = "inline-block";
             runButton.disabled = false;
             return;
           }
 
           const data = await response.json();
+
           const jobId = data.job_id;
           const colabUrl = data.backend_url;
 
@@ -232,16 +238,25 @@
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
-              "Your Colab backend is offline.<br><br>" +
-              "Please launch it here:<br>" +
-              `<a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Open Colab Backend</a>`;
+              "Your Colab backend URL was not returned by n8n.<br><br>" +
+              "This usually means the workflow did not include backend_url in the Respond to Webhook node.<br><br>" +
+              `Please verify the n8n response includes both <code>job_id</code> and <code>backend_url</code>.`;
             retryButton.style.display = "inline-block";
             runButton.disabled = false;
             return;
           }
 
           if (!jobId) {
-            throw new Error("Missing job ID from n8n.");
+            loading.textContent = "";
+            result.style.display = "block";
+            result.innerHTML =
+              "n8n responded without a job ID.<br><br>" +
+              "The frontend expects a JSON payload like:<br>" +
+              `<pre>{ "job_id": "...", "backend_url": "https://..." }</pre>` +
+              "Please update your Respond to Webhook node to return both values.";
+            retryButton.style.display = "inline-block";
+            runButton.disabled = false;
+            return;
           }
 
           loading.textContent = "Audit started…";
@@ -313,7 +328,6 @@
             const data = JSON.parse(event.data);
             loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
             statusText.textContent = `Processing: ${data.status || "in progress"}`;
-
             const pct = Math.min(95, progressBar.offsetWidth + 5);
             progressBar.style.width = pct + "%";
           } catch {}
