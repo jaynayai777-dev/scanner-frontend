@@ -204,35 +204,31 @@
             body: JSON.stringify({ url })
           });
 
+          /* ⭐ Friendly fallback for HTTP 500 */
           if (!response.ok) {
-              loading.textContent = "";
-              result.style.display = "block";
-
-              result.innxerHTML =
-                "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
-                "This usually means one of your backends is offline.<br><br>" +
-                "Please check:<br>" +
-                "• Your n8n workflow<br>" +
-                `• <a class="colab-link" href="https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3" target="_blank">Colab Backend</a>`;
-
-              runButton.disabled = false;
-              return;
-          }
-
+            loading.textContent = "";
+            result.style.display = "block";
+            result.innerHTML =
+              "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
+              "This usually means one of your backends is offline.<br><br>" +
+              "Please check:<br>" +
+              "• Your n8n workflow<br>" +
+              `• <a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Colab Backend</a>`;
+            runButton.disabled = false;
+            return;
           }
 
           const data = await response.json();
           const jobId = data.job_id;
           const colabUrl = data.backend_url;
 
-          // ⭐ Colab URL check
           if (!colabUrl) {
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
               "Your Colab backend is offline.<br><br>" +
               "Please launch it here:<br>" +
-              `<a class="colab-link" href="https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3" target="_blank">Open Colab Backend</a>`;
+              `<a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Open Colab Backend</a>`;
             runButton.disabled = false;
             return;
           }
@@ -246,6 +242,7 @@
           statusText.textContent = "Waiting for draft stream…";
 
           streamAudit(jobId, colabUrl);
+
         } catch (err) {
           loading.textContent = "";
           result.style.display = "block";
@@ -300,7 +297,6 @@
             loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
             statusText.textContent = `Processing: ${data.status || "in progress"}`;
 
-            // ⭐ Progress bar simulation
             const pct = Math.min(95, progressBar.offsetWidth + 5);
             progressBar.style.width = pct + "%";
           } catch {}
