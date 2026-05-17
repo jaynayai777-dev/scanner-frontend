@@ -134,6 +134,16 @@
       background: #4f46e5;
       transition: width 0.25s ease-out;
     }
+    .section-title {
+      font-weight: 700;
+      margin-top: 10px;
+      margin-bottom: 4px;
+      color: #e5e7ff;
+    }
+    .section-body {
+      margin-bottom: 8px;
+      color: #cbd5f5;
+    }
   </style>
 </head>
 
@@ -220,7 +230,7 @@
             result.style.display = "block";
             result.innerHTML =
               "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
-              "This usually means the workflow threw an error before Respond to Webhook.<br><br>" +
+              "This usually means the workflow threw an error before the final response.<br><br>" +
               "Check the n8n execution logs for this run.<br><br>" +
               (rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : "");
             retryButton.style.display = "inline-block";
@@ -242,11 +252,7 @@
             return;
           }
 
-          // handle array shape: [ { job_id, backend_url } ]
-          if (Array.isArray(data)) {
-            data = data[0] || {};
-          }
-
+          // We standardize on an OBJECT: { job_id, backend_url }
           const jobId = data.job_id;
           const colabUrl = data.backend_url;
 
@@ -255,7 +261,7 @@
             result.style.display = "block";
             result.innerHTML =
               "n8n responded, but the payload is missing job_id or backend_url.<br><br>" +
-              "Expected something like:<br><pre>{ \"job_id\": \"...\", \"backend_url\": \"https://...\" }</pre><br>" +
+              "Expected:<br><pre>{ \"job_id\": \"...\", \"backend_url\": \"https://...\" }</pre><br>" +
               "<strong>Actual parsed JSON:</strong><br><pre>" + JSON.stringify(data, null, 2) + "</pre>";
             retryButton.style.display = "inline-block";
             runButton.disabled = false;
@@ -266,7 +272,7 @@
           statusChip.style.display = "inline-flex";
           statusText.textContent = "Waiting for draft stream…";
 
-          // optional heartbeat check before streaming
+          // optional heartbeat check
           try {
             const hb = await fetch(colabUrl.replace(/\/+$/, "") + "/heartbeat");
             console.log("Heartbeat status:", hb.status);
@@ -293,16 +299,54 @@
         sendToN8N();
       }
 
-      function typeWriterEffect(element, text, speed = 12) {
-        let i = 0;
-        function type() {
-          if (i < text.length) {
-            element.textContent += text.charAt(i);
-            i++;
-            requestAnimationFrame(type);
-          }
+      function renderHumanReadable(resultObj) {
+        // Expecting shape: { full_audit: {...}, chunks: {...} }
+        const chunks = resultObj.chunks || {};
+        const full = resultObj.full_audit || {};
+
+        let out = "";
+
+        if (full.executive_summary) {
+          out += "=== Executive Summary ===\n";
+          out += full.executive_summary + "\n\n";
         }
-        type();
+
+        if (full.technical_audit) {
+          out += "=== Technical SEO Audit ===\n";
+          for (const [section, content] of Object.entries(full.technical_audit)) {
+            out += `\n[${section.toUpperCase()}]\n`;
+            out += (typeof content === "string"
+              ? content
+              : JSON.stringify(content, null, 2)) + "\n";
+          }
+          out += "\n";
+        }
+
+        if (full.roadmap) {
+          out += "=== Roadmap (0–90 Days) ===\n";
+          out += JSON.stringify(full.roadmap, null, 2) + "\n\n";
+        }
+
+        if (full.risk_assessment) {
+          out += "=== Risk Assessment ===\n";
+          out += full.risk_assessment + "\n\n";
+        }
+
+        if (full.implementation_guide) {
+          out += "=== Implementation Guide ===\n";
+          out += full.implementation_guide + "\n\n";
+        }
+
+        if (full.final_summary) {
+          out += "=== Final Summary ===\n";
+          out += full.final_summary + "\n\n";
+        }
+
+        if (!out.trim()) {
+          out = JSON.stringify(resultObj, null, 2);
+        }
+
+        return out;
       }
 
       function streamAudit(jobId, colabUrl) {
@@ -339,7 +383,8 @@
             const data = JSON.parse(event.data);
             loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
             statusText.textContent = `Processing: ${data.status || "in progress"}`;
-            const pct = Math.min(95, progressBar.offsetWidth + 5);
+            const current = parseInt(progressBar.style.width || "0", 10) || 0;
+            const pct = Math.min(95, current + 5);
             progressBar.style.width = pct + "%";
           } catch {}
         });
@@ -352,8 +397,8 @@
 
           try {
             const data = JSON.parse(event.data);
-            result.textContent = "";
-            typeWriterEffect(result, JSON.stringify(data, null, 2));
+            const human = renderHumanReadable(data);
+            result.textContent = human;
           } catch {
             result.textContent = event.data || "[Received complete event with non‑JSON payload]";
           }
