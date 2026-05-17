@@ -253,10 +253,13 @@
           }
 
           // We standardize on an OBJECT: { job_id, backend_url }
-          const jobId = data.job_id;
-          const colabUrl = data.backend_url;
+          const data = await response.json();
+          const item = Array.isArray(data) ? data[0] : data;
+          
+          const jobId = item.job_id;
+          const colabUrl = item.backend_url;
 
-          if (!colabUrl || !jobId) {
+          if (!backendUrl || !jobId) {
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
