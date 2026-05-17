@@ -5,7 +5,6 @@
   <title>SEO Audit Draft Generator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Comfortaa Font -->
   <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;600;700&display=swap" rel="stylesheet">
 
   <style>
@@ -182,10 +181,9 @@
 
       async function sendToN8N() {
         let url = urlInput.value.trim();
-        if (!url && lastUrl) {
-          url = lastUrl;
-        }
+        if (!url && lastUrl) url = lastUrl;
 
+        // reset UI
         result.style.display = "none";
         result.textContent = "";
         loading.textContent = "";
@@ -213,47 +211,52 @@
             body: JSON.stringify({ url })
           });
 
+          const rawText = await response.text().catch(() => "");
+          console.log("n8n status:", response.status);
+          console.log("n8n body:", rawText);
+
           if (!response.ok) {
-            const text = await response.text().catch(() => "");
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
               "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
-              "This usually means one of your backends is offline or the workflow threw an error.<br><br>" +
-              "Please check:<br>" +
-              "• Your n8n workflow logs<br>" +
-              `• <a class='colab-link' href='https://colab.research.google.com/drive/16IJkYjBE7-SQ_v_F4IrI8RSJiG1law5y#scrollTo=1NhEMXGxNBH3' target='_blank'>Colab Backend</a>` +
-              (text ? "<br><br><strong>n8n response body:</strong><br><pre>" + text + "</pre>" : "");
+              "This usually means the workflow threw an error before Respond to Webhook.<br><br>" +
+              "Check the n8n execution logs for this run.<br><br>" +
+              (rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : "");
             retryButton.style.display = "inline-block";
             runButton.disabled = false;
             return;
           }
 
-          const data = await response.json();
+          let data;
+          try {
+            data = rawText ? JSON.parse(rawText) : {};
+          } catch (e) {
+            loading.textContent = "";
+            result.style.display = "block";
+            result.innerHTML =
+              "n8n responded with non‑JSON or unexpected JSON.<br><br>" +
+              "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>";
+            retryButton.style.display = "inline-block";
+            runButton.disabled = false;
+            return;
+          }
+
+          // handle array shape: [ { job_id, backend_url } ]
+          if (Array.isArray(data)) {
+            data = data[0] || {};
+          }
 
           const jobId = data.job_id;
           const colabUrl = data.backend_url;
 
-          if (!colabUrl) {
+          if (!colabUrl || !jobId) {
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
-              "Your Colab backend URL was not returned by n8n.<br><br>" +
-              "This usually means the workflow did not include backend_url in the Respond to Webhook node.<br><br>" +
-              `Please verify the n8n response includes both <code>job_id</code> and <code>backend_url</code>.`;
-            retryButton.style.display = "inline-block";
-            runButton.disabled = false;
-            return;
-          }
-
-          if (!jobId) {
-            loading.textContent = "";
-            result.style.display = "block";
-            result.innerHTML =
-              "n8n responded without a job ID.<br><br>" +
-              "The frontend expects a JSON payload like:<br>" +
-              `<pre>{ "job_id": "...", "backend_url": "https://..." }</pre>` +
-              "Please update your Respond to Webhook node to return both values.";
+              "n8n responded, but the payload is missing job_id or backend_url.<br><br>" +
+              "Expected something like:<br><pre>{ \"job_id\": \"...\", \"backend_url\": \"https://...\" }</pre><br>" +
+              "<strong>Actual parsed JSON:</strong><br><pre>" + JSON.stringify(data, null, 2) + "</pre>";
             retryButton.style.display = "inline-block";
             runButton.disabled = false;
             return;
@@ -262,6 +265,14 @@
           loading.textContent = "Audit started…";
           statusChip.style.display = "inline-flex";
           statusText.textContent = "Waiting for draft stream…";
+
+          // optional heartbeat check before streaming
+          try {
+            const hb = await fetch(colabUrl.replace(/\/+$/, "") + "/heartbeat");
+            console.log("Heartbeat status:", hb.status);
+          } catch (e) {
+            console.warn("Heartbeat failed:", e);
+          }
 
           streamAudit(jobId, colabUrl);
 
