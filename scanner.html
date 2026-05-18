@@ -238,6 +238,7 @@
             return;
           }
 
+          // Parse JSON safely
           let data;
           try {
             data = rawText ? JSON.parse(rawText) : {};
@@ -252,12 +253,12 @@
             return;
           }
 
-          // We standardize on an OBJECT: { job_id, backend_url }
-          const data = await response.json();
+          // Normalize n8n output (array or object)
           const item = Array.isArray(data) ? data[0] : data;
           
+          // Extract fields
           const jobId = item.job_id;
-          const colabUrl = item.backend_url;
+          const backendUrl = item.backend_url;
 
           if (!backendUrl || !jobId) {
             loading.textContent = "";
