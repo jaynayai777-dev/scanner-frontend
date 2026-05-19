@@ -175,254 +175,219 @@
     <pre id="result" style="display:none;"></pre>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    document.addEventListener("DOMContentLoaded", () => {
-      const urlInput = document.getElementById("urlInput");
-      const loading = document.getElementById("loading");
-      const result = document.getElementById("result");
-      const runButton = document.getElementById("runButton");
-      const retryButton = document.getElementById("retryButton");
-      const statusChip = document.getElementById("statusChip");
-      const statusText = document.getElementById("statusText");
-      const progressContainer = document.getElementById("progressContainer");
-      const progressBar = document.getElementById("progressBar");
+  document.addEventListener("DOMContentLoaded", () => {
+    // -----------------------------
+    // DOM references
+    // -----------------------------
+    const urlInput = document.getElementById("urlInput");
+    const loading = document.getElementById("loading");
+    const result = document.getElementById("result");
+    const runButton = document.getElementById("runButton");
+    const retryButton = document.getElementById("retryButton");
+    const statusChip = document.getElementById("statusChip");
+    const statusText = document.getElementById("statusText");
+    const progressContainer = document.getElementById("progressContainer");
+    const progressBar = document.getElementById("progressBar");
 
-      let lastUrl = "";
+    let lastUrl = "";
+    let currentChannel = null;
+  
+    // -----------------------------
+    // Supabase client
+    // -----------------------------
+    const supabaseClient = window.supabase.createClient(
+      "YOUR_SUPABASE_URL",
+      "YOUR_SUPABASE_ANON_KEY"
+    );
 
-      async function sendToN8N() {
-        let url = urlInput.value.trim();
-        if (!url && lastUrl) url = lastUrl;
+    // -----------------------------
+    // UI helpers
+    // -----------------------------
+    function resetUI() {
+      result.style.display = "none";
+      result.innerHTML = "";
+      loading.textContent = "";
+      statusChip.style.display = "none";
+      statusText.textContent = "";
+      progressContainer.style.display = "none";
+      progressBar.style.width = "0%";
+      retryButton.style.display = "none";
+    }
 
-        // reset UI
-        result.style.display = "none";
-        result.textContent = "";
-        loading.textContent = "";
-        statusChip.style.display = "none";
-        statusText.textContent = "";
-        progressContainer.style.display = "none";
-        progressBar.style.width = "0%";
-        retryButton.style.display = "none";
-        runButton.disabled = true;
+    function showError(message, detailsHtml = "") {
+      loading.textContent = "";
+      result.style.display = "block";
+      result.innerHTML = message + (detailsHtml ? "<br><br>" + detailsHtml : "");
+      retryButton.style.display = "inline-block";
+      runButton.disabled = false;
+    }
 
-        if (!url) {
-          result.style.display = "block";
-          result.textContent = "Please enter a valid URL.";
-          runButton.disabled = false;
-          return;
-        }
+    // -----------------------------
+    // Append streamed chunk to UI
+    // -----------------------------
+    function appendChunkToUI(section, content) {
+      result.style.display = "block";
 
-        lastUrl = url;
-        loading.textContent = "Submitting URL to n8n…";
+      const sectionId = `sec-${section}`;
+      let sectionDiv = document.getElementById(sectionId);
 
-        try {
-          const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url })
-          });
+      if (!sectionDiv) {
+        sectionDiv = document.createElement("div");
+        sectionDiv.id = sectionId;
 
-          const rawText = await response.text().catch(() => "");
-          console.log("n8n status:", response.status);
-          console.log("n8n body:", rawText);
+        const h3 = document.createElement("h3");
+        h3.textContent = section.replace(/_/g, " ");
+        sectionDiv.appendChild(h3);
 
-          if (!response.ok) {
-            loading.textContent = "";
-            result.style.display = "block";
-            result.innerHTML =
-              "Error:<br>n8n returned an error (HTTP " + response.status + ")<br><br>" +
-              "This usually means the workflow threw an error before the final response.<br><br>" +
-              "Check the n8n execution logs for this run.<br><br>" +
-              (rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : "");
-            retryButton.style.display = "inline-block";
-            runButton.disabled = false;
-            return;
-          }
-
-          // Parse JSON safely
-          let data;
-          try {
-            data = rawText ? JSON.parse(rawText) : {};
-          } catch (e) {
-            loading.textContent = "";
-            result.style.display = "block";
-            result.innerHTML =
-              "n8n responded with non‑JSON or unexpected JSON.<br><br>" +
-              "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>";
-            retryButton.style.display = "inline-block";
-            runButton.disabled = false;
-            return;
-          }
-
-          // Normalize n8n output (array or object)
-          const item = Array.isArray(data) ? data[0] : data;
-          
-          // Extract fields
-          const jobId = item.job_id;
-          const colabUrl = item.backend_url;
-
-          if (!colabUrl || !jobId) {
-            loading.textContent = "";
-            result.style.display = "block";
-            result.innerHTML =
-              "n8n responded, but the payload is missing job_id or backend_url.<br><br>" +
-              "Expected:<br><pre>{ \"job_id\": \"...\", \"backend_url\": \"https://...\" }</pre><br>" +
-              "<strong>Actual parsed JSON:</strong><br><pre>" + JSON.stringify(data, null, 2) + "</pre>";
-            retryButton.style.display = "inline-block";
-            runButton.disabled = false;
-            return;
-          }
-
-          loading.textContent = "Audit started…";
-          statusChip.style.display = "inline-flex";
-          statusText.textContent = "Waiting for draft stream…";
-
-          // optional heartbeat check
-          try {
-            const hb = await fetch(colabUrl.replace(/\/+$/, "") + "/heartbeat");
-            console.log("Heartbeat status:", hb.status);
-          } catch (e) {
-            console.warn("Heartbeat failed:", e);
-          }
-
-          streamAudit(jobId, colabUrl);
-
-        } catch (err) {
-          loading.textContent = "";
-          result.style.display = "block";
-          result.textContent = "Error:\n" + (err.message || String(err));
-          retryButton.style.display = "inline-block";
-          runButton.disabled = false;
-        }
+        result.appendChild(sectionDiv);
       }
 
-      function retryConnection() {
-        result.style.display = "none";
-        result.textContent = "";
-        loading.textContent = "Rechecking backend connection…";
-        retryButton.style.display = "none";
-        sendToN8N();
+      const p = document.createElement("p");
+      p.textContent = content;
+      sectionDiv.appendChild(p);
+
+      result.scrollTop = result.scrollHeight;
+    }
+
+    // -----------------------------
+    // Supabase Realtime subscription
+    // -----------------------------
+    function subscribeToDraft(jobId) {
+      // Clean up previous subscription
+      if (currentChannel) {
+        supabaseClient.removeChannel(currentChannel);
+        currentChannel = null;
       }
 
-      function renderHumanReadable(resultObj) {
-        // Expecting shape: { full_audit: {...}, chunks: {...} }
-        const chunks = resultObj.chunks || {};
-        const full = resultObj.full_audit || {};
+      statusChip.style.display = "inline-flex";
+      statusText.textContent = "Waiting for draft stream…";
+      progressContainer.style.display = "block";
+      progressBar.style.width = "5%";
 
-        let out = "";
+      currentChannel = supabaseClient
+        .channel(`job-${jobId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "draft_chunks",
+            filter: `job_id=eq.${jobId}`
+          },
+          payload => {
+            const chunk = payload.new;
+            appendChunkToUI(chunk.section, chunk.content);
 
-        if (full.executive_summary) {
-          out += "=== Executive Summary ===\n";
-          out += full.executive_summary + "\n\n";
-        }
-
-        if (full.technical_audit) {
-          out += "=== Technical SEO Audit ===\n";
-          for (const [section, content] of Object.entries(full.technical_audit)) {
-            out += `\n[${section.toUpperCase()}]\n`;
-            out += (typeof content === "string"
-              ? content
-              : JSON.stringify(content, null, 2)) + "\n";
-          }
-          out += "\n";
-        }
-
-        if (full.roadmap) {
-          out += "=== Roadmap (0–90 Days) ===\n";
-          out += JSON.stringify(full.roadmap, null, 2) + "\n\n";
-        }
-
-        if (full.risk_assessment) {
-          out += "=== Risk Assessment ===\n";
-          out += full.risk_assessment + "\n\n";
-        }
-
-        if (full.implementation_guide) {
-          out += "=== Implementation Guide ===\n";
-          out += full.implementation_guide + "\n\n";
-        }
-
-        if (full.final_summary) {
-          out += "=== Final Summary ===\n";
-          out += full.final_summary + "\n\n";
-        }
-
-        if (!out.trim()) {
-          out = JSON.stringify(resultObj, null, 2);
-        }
-
-        return out;
-      }
-
-      function streamAudit(jobId, colabUrl) {
-        const streamUrl = `${colabUrl.replace(/\/+$/, "")}/generate_stream?job_id=${encodeURIComponent(jobId)}`;
-
-        result.style.display = "block";
-        result.textContent = "";
-        loading.textContent = "Connecting to audit stream…";
-        progressContainer.style.display = "block";
-
-        let source;
-        try {
-          source = new EventSource(streamUrl);
-        } catch (e) {
-          loading.textContent = "";
-          result.textContent = "Error opening stream:\n" + (e.message || String(e));
-          retryButton.style.display = "inline-block";
-          runButton.disabled = false;
-          return;
-        }
-
-        source.addEventListener("open", () => {
-          statusText.textContent = "Connected to draft stream…";
-        });
-
-        source.addEventListener("start", () => {
-          loading.textContent = "Audit initializing…";
-          statusText.textContent = "Initializing…";
-          progressBar.style.width = "5%";
-        });
-
-        source.addEventListener("progress", (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            loading.textContent = `Processing… Status: ${data.status || "in progress"}`;
-            statusText.textContent = `Processing: ${data.status || "in progress"}`;
+            // Progress bar movement
             const current = parseInt(progressBar.style.width || "0", 10) || 0;
-            const pct = Math.min(95, current + 5);
+            const pct = Math.min(95, current + 3);
             progressBar.style.width = pct + "%";
-          } catch {}
-        });
 
-        source.addEventListener("complete", (event) => {
-          loading.textContent = "";
-          statusText.textContent = "Draft complete";
-          runButton.disabled = false;
-          progressBar.style.width = "100%";
-
-          try {
-            const data = JSON.parse(event.data);
-            const human = renderHumanReadable(data);
-            result.textContent = human;
-          } catch {
-            result.textContent = event.data || "[Received complete event with non‑JSON payload]";
+            statusText.textContent = "Streaming draft…";
           }
-
-          source.close();
+        )
+        .subscribe(status => {
+          if (status === "SUBSCRIBED") {
+            console.log("Realtime subscribed for job:", jobId);
+          }
         });
+    }
 
-        source.addEventListener("error", () => {
-          loading.textContent = "";
-          runButton.disabled = false;
-          retryButton.style.display = "inline-block";
-          statusText.textContent = "Stream error";
-          result.textContent += "\n\n[Stream error or connection closed]";
-          source.close();
-        });
+    // -----------------------------
+    // Main n8n call
+    // -----------------------------
+    async function sendToN8N() {
+      let url = urlInput.value.trim();
+      if (!url && lastUrl) url = lastUrl;
+
+      resetUI();
+      runButton.disabled = true;
+
+      if (!url) {
+        showError("Please enter a valid URL.");
+        return;
       }
 
-      window.sendToN8N = sendToN8N;
-      window.retryConnection = retryConnection;
-    });
+      lastUrl = url;
+      loading.textContent = "Submitting URL to n8n…";
+
+      try {
+        const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+
+        const rawText = await response.text().catch(() => "");
+        console.log("n8n status:", response.status);
+        console.log("n8n body:", rawText);
+
+        if (!response.ok) {
+          showError(
+            "Error: n8n returned an error (HTTP " + response.status + ")",
+            rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : ""
+          );
+          return;
+        }
+
+        let data;
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch (e) {
+          showError(
+            "n8n responded with non‑JSON or unexpected JSON.",
+            "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>"
+          );
+          return;
+        }
+
+        const item = Array.isArray(data) ? data[0] : data;
+        const jobId = item.job_id;
+        const backendUrl = item.backend_url;
+
+        if (!backendUrl || !jobId) {
+          showError(
+            "n8n responded, but the payload is missing job_id or backend_url.",
+            "<pre>" + JSON.stringify(data, null, 2) + "</pre>"
+          );
+          return;
+        }
+
+        loading.textContent = "Audit started…";
+        statusChip.style.display = "inline-flex";
+        statusText.textContent = "Waiting for draft stream…";
+
+        // Optional heartbeat
+        try {
+          const hb = await fetch(backendUrl.replace(/\/+$/, "") + "/gateway");
+          console.log("Heartbeat:", hb.status);
+        } catch (e) {
+          console.warn("Heartbeat failed:", e);
+        }
+
+        // Subscribe to Supabase Realtime
+        subscribeToDraft(jobId);
+
+        runButton.disabled = false;
+
+      } catch (err) {
+        showError("Error: " + (err.message || String(err)));
+      }
+    }
+
+    function retryConnection() {
+      resetUI();
+      loading.textContent = "Rechecking backend connection…";
+      retryButton.style.display = "none";
+      sendToN8N();
+    }
+
+    // Expose globally
+    window.sendToN8N = sendToN8N;
+    window.retryConnection = retryConnection;
+  });
   </script>
-</body>
-</html>
+  </body>
+  </html>
