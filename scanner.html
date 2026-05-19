@@ -258,9 +258,9 @@
           
           // Extract fields
           const jobId = item.job_id;
-          const backendUrl = item.backend_url;
+          const colabUrl = item.backend_url;
 
-          if (!backendUrl || !jobId) {
+          if (!colabUrl || !jobId) {
             loading.textContent = "";
             result.style.display = "block";
             result.innerHTML =
