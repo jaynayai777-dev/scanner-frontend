@@ -175,219 +175,212 @@
     <pre id="result" style="display:none;"></pre>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script>
-  document.addEventListener("DOMContentLoaded", () => {
-    // -----------------------------
-    // DOM references
-    // -----------------------------
-    const urlInput = document.getElementById("urlInput");
-    const loading = document.getElementById("loading");
-    const result = document.getElementById("result");
-    const runButton = document.getElementById("runButton");
-    const retryButton = document.getElementById("retryButton");
-    const statusChip = document.getElementById("statusChip");
-    const statusText = document.getElementById("statusText");
-    const progressContainer = document.getElementById("progressContainer");
-    const progressBar = document.getElementById("progressBar");
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  // -----------------------------
+  // DOM references
+  // -----------------------------
+  const urlInput = document.getElementById("urlInput");
+  const loading = document.getElementById("loading");
+  const result = document.getElementById("result");
+  const runButton = document.getElementById("runButton");
+  const retryButton = document.getElementById("retryButton");
+  const statusChip = document.getElementById("statusChip");
+  const statusText = document.getElementById("statusText");
+  const progressContainer = document.getElementById("progressContainer");
+  const progressBar = document.getElementById("progressBar");
 
-    let lastUrl = "";
-    let currentChannel = null;
-  
-    // -----------------------------
-    // Supabase client
-    // -----------------------------
-    const supabaseClient = window.supabase.createClient(
-      "https://plcbjxwafbphpebtmoeu.supabase.co",
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8"
-    );
+  let lastUrl = "";
+  let currentChannel = null;
 
-    // -----------------------------
-    // UI helpers
-    // -----------------------------
-    function resetUI() {
-      result.style.display = "none";
-      result.innerHTML = "";
-      loading.textContent = "";
-      statusChip.style.display = "none";
-      statusText.textContent = "";
-      progressContainer.style.display = "none";
-      progressBar.style.width = "0%";
-      retryButton.style.display = "none";
+  // -----------------------------
+  // Supabase client
+  // -----------------------------
+  const supabaseClient = window.supabase.createClient(
+    "https://plcbjxwafbphpebtmoeu.supabase.co",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8"
+  );
+
+  // -----------------------------
+  // UI helpers
+  // -----------------------------
+  function resetUI() {
+    result.style.display = "none";
+    result.innerHTML = "";
+    loading.textContent = "";
+    statusChip.style.display = "none";
+    statusText.textContent = "";
+    progressContainer.style.display = "none";
+    progressBar.style.width = "0%";
+    retryButton.style.display = "none";
+  }
+
+  function showError(message, detailsHtml = "") {
+    loading.textContent = "";
+    result.style.display = "block";
+    result.innerHTML = message + (detailsHtml ? "<br><br>" + detailsHtml : "");
+    retryButton.style.display = "inline-block";
+    runButton.disabled = false;
+  }
+
+  // -----------------------------
+  // Append streamed chunk to UI
+  // -----------------------------
+  function appendChunkToUI(section, content) {
+    result.style.display = "block";
+
+    const sectionId = `sec-${section}`;
+    let sectionDiv = document.getElementById(sectionId);
+
+    if (!sectionDiv) {
+      sectionDiv = document.createElement("div");
+      sectionDiv.id = sectionId;
+
+      const h3 = document.createElement("h3");
+      h3.textContent = section.replace(/_/g, " ");
+      sectionDiv.appendChild(h3);
+
+      result.appendChild(sectionDiv);
     }
 
-    function showError(message, detailsHtml = "") {
-      loading.textContent = "";
-      result.style.display = "block";
-      result.innerHTML = message + (detailsHtml ? "<br><br>" + detailsHtml : "");
-      retryButton.style.display = "inline-block";
-      runButton.disabled = false;
+    const p = document.createElement("p");
+    p.textContent = content;
+    sectionDiv.appendChild(p);
+
+    result.scrollTop = result.scrollHeight;
+  }
+
+  // -----------------------------
+  // Supabase Realtime subscription
+  // -----------------------------
+  function subscribeToDraft(jobId) {
+    if (currentChannel) {
+      supabaseClient.removeChannel(currentChannel);
+      currentChannel = null;
     }
 
-    // -----------------------------
-    // Append streamed chunk to UI
-    // -----------------------------
-    function appendChunkToUI(section, content) {
-      result.style.display = "block";
+    statusChip.style.display = "inline-flex";
+    statusText.textContent = "Waiting for draft stream…";
+    progressContainer.style.display = "block";
+    progressBar.style.width = "5%";
 
-      const sectionId = `sec-${section}`;
-      let sectionDiv = document.getElementById(sectionId);
+    currentChannel = supabaseClient
+      .channel(`job-${jobId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "draft_chunks",
+          filter: `job_id=eq.${jobId}`
+        },
+        payload => {
+          const chunk = payload.new;
+          appendChunkToUI(chunk.section, chunk.content);
 
-      if (!sectionDiv) {
-        sectionDiv = document.createElement("div");
-        sectionDiv.id = sectionId;
+          const current = parseInt(progressBar.style.width || "0", 10) || 0;
+          const pct = Math.min(95, current + 3);
+          progressBar.style.width = pct + "%";
 
-        const h3 = document.createElement("h3");
-        h3.textContent = section.replace(/_/g, " ");
-        sectionDiv.appendChild(h3);
+          statusText.textContent = "Streaming draft…";
+        }
+      )
+      .subscribe();
+  }
 
-        result.appendChild(sectionDiv);
-      }
+  // -----------------------------
+  // Main n8n call
+  // -----------------------------
+  async function sendToN8N() {
+    let url = urlInput.value.trim();
+    if (!url && lastUrl) url = lastUrl;
 
-      const p = document.createElement("p");
-      p.textContent = content;
-      sectionDiv.appendChild(p);
+    resetUI();
+    runButton.disabled = true;
 
-      result.scrollTop = result.scrollHeight;
+    if (!url) {
+      showError("Please enter a valid URL.");
+      return;
     }
 
-    // -----------------------------
-    // Supabase Realtime subscription
-    // -----------------------------
-    function subscribeToDraft(jobId) {
-      // Clean up previous subscription
-      if (currentChannel) {
-        supabaseClient.removeChannel(currentChannel);
-        currentChannel = null;
-      }
+    lastUrl = url;
+    loading.textContent = "Submitting URL to n8n…";
 
-      statusChip.style.display = "inline-flex";
-      statusText.textContent = "Waiting for draft stream…";
-      progressContainer.style.display = "block";
-      progressBar.style.width = "5%";
+    try {
+      const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
 
-      currentChannel = supabaseClient
-        .channel(`job-${jobId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "draft_chunks",
-            filter: `job_id=eq.${jobId}`
-          },
-          payload => {
-            const chunk = payload.new;
-            appendChunkToUI(chunk.section, chunk.content);
+      const rawText = await response.text().catch(() => "");
+      console.log("n8n status:", response.status);
+      console.log("n8n body:", rawText);
 
-            // Progress bar movement
-            const current = parseInt(progressBar.style.width || "0", 10) || 0;
-            const pct = Math.min(95, current + 3);
-            progressBar.style.width = pct + "%";
-
-            statusText.textContent = "Streaming draft…";
-          }
-        )
-        .subscribe(status => {
-          if (status === "SUBSCRIBED") {
-            console.log("Realtime subscribed for job:", jobId);
-          }
-        });
-    }
-
-    // -----------------------------
-    // Main n8n call
-    // -----------------------------
-    async function sendToN8N() {
-      let url = urlInput.value.trim();
-      if (!url && lastUrl) url = lastUrl;
-
-      resetUI();
-      runButton.disabled = true;
-
-      if (!url) {
-        showError("Please enter a valid URL.");
+      if (!response.ok) {
+        showError(
+          "Error: n8n returned an error (HTTP " + response.status + ")",
+          rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : ""
+        );
         return;
       }
 
-      lastUrl = url;
-      loading.textContent = "Submitting URL to n8n…";
-
+      let data;
       try {
-        const response = await fetch("https://n8n-scanner-jd5c.onrender.com/webhook/scan-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url })
-        });
-
-        const rawText = await response.text().catch(() => "");
-        console.log("n8n status:", response.status);
-        console.log("n8n body:", rawText);
-
-        if (!response.ok) {
-          showError(
-            "Error: n8n returned an error (HTTP " + response.status + ")",
-            rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : ""
-          );
-          return;
-        }
-
-        let data;
-        try {
-          data = rawText ? JSON.parse(rawText) : {};
-        } catch (e) {
-          showError(
-            "n8n responded with non‑JSON or unexpected JSON.",
-            "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>"
-          );
-          return;
-        }
-
-        const item = Array.isArray(data) ? data[0] : data;
-        const jobId = item.job_id;
-        const backendUrl = item.backend_url;
-
-        if (!backendUrl || !jobId) {
-          showError(
-            "n8n responded, but the payload is missing job_id or backend_url.",
-            "<pre>" + JSON.stringify(data, null, 2) + "</pre>"
-          );
-          return;
-        }
-
-        loading.textContent = "Audit started…";
-        statusChip.style.display = "inline-flex";
-        statusText.textContent = "Waiting for draft stream…";
-
-        // Optional heartbeat
-        try {
-          const hb = await fetch(backendUrl.replace(/\/+$/, "") + "/gateway");
-          console.log("Heartbeat:", hb.status);
-        } catch (e) {
-          console.warn("Heartbeat failed:", e);
-        }
-
-        // Subscribe to Supabase Realtime
-        subscribeToDraft(jobId);
-
-        runButton.disabled = false;
-
-      } catch (err) {
-        showError("Error: " + (err.message || String(err)));
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (e) {
+        showError(
+          "n8n responded with non‑JSON or unexpected JSON.",
+          "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>"
+        );
+        return;
       }
-    }
 
-    function retryConnection() {
-      resetUI();
-      loading.textContent = "Rechecking backend connection…";
-      retryButton.style.display = "none";
-      sendToN8N();
-    }
+      const item = Array.isArray(data) ? data[0] : data;
+      const jobId = item.job_id;
+      const backend_url = item.backend_url;   // <— FIXED
 
-    // Expose globally
-    window.sendToN8N = sendToN8N;
-    window.retryConnection = retryConnection;
-  });
-  </script>
-  </body>
-  </html>
+      if (!backend_url || !jobId) {
+        showError(
+          "n8n responded, but the payload is missing job_id or backend_url.",
+          "<pre>" + JSON.stringify(data, null, 2) + "</pre>"
+        );
+        return;
+      }
+
+      loading.textContent = "Audit started…";
+      statusChip.style.display = "inline-flex";
+      statusText.textContent = "Waiting for draft stream…";
+
+      // Optional heartbeat
+      try {
+        const hb = await fetch(backend_url.replace(/\/+$/, "") + "/gateway");
+        console.log("Heartbeat:", hb.status);
+      } catch (e) {
+        console.warn("Heartbeat failed:", e);
+      }
+
+      // Subscribe to Supabase Realtime
+      subscribeToDraft(jobId);
+
+      runButton.disabled = false;
+
+    } catch (err) {
+      showError("Error: " + (err.message || String(err)));
+    }
+  }
+
+  function retryConnection() {
+    resetUI();
+    loading.textContent = "Rechecking backend connection…";
+    retryButton.style.display = "none";
+    sendToN8N();
+  }
+
+  window.sendToN8N = sendToN8N;
+  window.retryConnection = retryConnection;
+});
+</script>
+</body>
+</html>
