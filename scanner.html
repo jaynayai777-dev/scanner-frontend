@@ -178,9 +178,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  // -----------------------------
-  // DOM references
-  // -----------------------------
   const urlInput = document.getElementById("urlInput");
   const loading = document.getElementById("loading");
   const result = document.getElementById("result");
@@ -193,18 +190,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let lastUrl = "";
   let currentChannel = null;
+  let jobStatusChannel = null;
+  const CHUNK_TYPING_SPEED = 6;
+  const EST_TOTAL_CHUNKS = 22;
+  let chunkCounts = {};
+  let chunkBuffers = {};
+  let sectionOrderMap = {};
 
-  // -----------------------------
-  // Supabase client
-  // -----------------------------
+  // IMPORTANT: Use the anon key here. Do NOT paste the Service Role key in the browser.
   const supabaseClient = window.supabase.createClient(
     "https://plcbjxwafbphpebtmoeu.supabase.co",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8"
+    "<ANON_KEY>"
   );
 
-  // -----------------------------
-  // UI helpers
-  // -----------------------------
   function resetUI() {
     result.style.display = "none";
     result.innerHTML = "";
@@ -216,82 +214,144 @@ document.addEventListener("DOMContentLoaded", () => {
     retryButton.style.display = "none";
   }
 
-  function showError(message, detailsHtml = "") {
+  function showError(message) {
     loading.textContent = "";
     result.style.display = "block";
-    result.innerHTML = message + (detailsHtml ? "<br><br>" + detailsHtml : "");
+    result.innerHTML = `<div class="error-box">${message}</div>`;
     retryButton.style.display = "inline-block";
     runButton.disabled = false;
   }
 
-  // -----------------------------
-  // Append streamed chunk to UI
-  // -----------------------------
-  function appendChunkToUI(section, content) {
-    result.style.display = "block";
+  function typeTextIntoElement(el, text, speed = CHUNK_TYPING_SPEED) {
+    let existing = el.textContent || "";
+    let remaining = text;
+    if (text.startsWith(existing)) remaining = text.slice(existing.length);
+    else { existing = ""; el.textContent = ""; }
+    let i = 0;
+    const t = setInterval(() => {
+      el.textContent = existing + remaining.slice(0, ++i);
+      el.scrollIntoView({ behavior: "smooth", block: "end" });
+      if (i >= remaining.length) clearInterval(t);
+    }, speed);
+  }
 
+  function appendChunkToUI(section, content, order_index = null, jobId = null) {
+    result.style.display = "block";
     const sectionId = `sec-${section}`;
     let sectionDiv = document.getElementById(sectionId);
 
     if (!sectionDiv) {
       sectionDiv = document.createElement("div");
       sectionDiv.id = sectionId;
+      sectionDiv.className = "report-section";
 
       const h3 = document.createElement("h3");
       h3.textContent = section.replace(/_/g, " ");
+      h3.className = "report-section-title";
       sectionDiv.appendChild(h3);
 
-      result.appendChild(sectionDiv);
+      const contentWrapper = document.createElement("div");
+      contentWrapper.className = "report-section-body";
+      sectionDiv.appendChild(contentWrapper);
+
+      if (order_index !== null && jobId) {
+        sectionOrderMap[jobId] = sectionOrderMap[jobId] || {};
+        sectionOrderMap[jobId][section] = order_index;
+        const siblings = Array.from(result.querySelectorAll(".report-section"));
+        let inserted = false;
+        for (let s of siblings) {
+          const sid = s.id.replace(/^sec-/, "");
+          const idx = sectionOrderMap[jobId][sid];
+          if (typeof idx === "number" && idx > order_index) {
+            result.insertBefore(sectionDiv, s);
+            inserted = true;
+            break;
+          }
+        }
+        if (!inserted) result.appendChild(sectionDiv);
+      } else {
+        result.appendChild(sectionDiv);
+      }
     }
 
+    const body = sectionDiv.querySelector(".report-section-body") || sectionDiv.appendChild(document.createElement("div"));
     const p = document.createElement("p");
-    p.textContent = content;
-    sectionDiv.appendChild(p);
+    p.className = "report-paragraph";
+    body.appendChild(p);
 
+    const bufferKey = sectionId;
+    chunkBuffers[bufferKey] = chunkBuffers[bufferKey] || "";
+    const newBuffer = (chunkBuffers[bufferKey] + content).trim();
+    chunkBuffers[bufferKey] = newBuffer;
+
+    typeTextIntoElement(p, newBuffer);
     result.scrollTop = result.scrollHeight;
   }
 
-  // -----------------------------
-  // Supabase Realtime subscription
-  // -----------------------------
   function subscribeToDraft(jobId) {
     if (currentChannel) {
-      supabaseClient.removeChannel(currentChannel);
+      try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
       currentChannel = null;
+    }
+    if (jobStatusChannel) {
+      try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) {}
+      jobStatusChannel = null;
     }
 
     statusChip.style.display = "inline-flex";
     statusText.textContent = "Waiting for draft stream…";
     progressContainer.style.display = "block";
     progressBar.style.width = "5%";
+    chunkCounts[jobId] = 0;
+    sectionOrderMap[jobId] = {};
 
     currentChannel = supabaseClient
       .channel(`job-${jobId}`)
       .on(
         "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "draft_chunks",
-          filter: `job_id=eq.${jobId}`
-        },
+        { event: "INSERT", schema: "public", table: "draft_chunks", filter: `job_id=eq.${jobId}` },
         payload => {
           const chunk = payload.new;
-          appendChunkToUI(chunk.section, chunk.content);
-
-          const current = parseInt(progressBar.style.width || "0", 10) || 0;
-          const pct = Math.min(95, current + 3);
+          const orderIndex = (typeof chunk.order_index !== "undefined") ? chunk.order_index : null;
+          appendChunkToUI(chunk.section, chunk.content, orderIndex, jobId);
+          chunkCounts[jobId] = (chunkCounts[jobId] || 0) + 1;
+          const pct = Math.min(95, Math.round((chunkCounts[jobId] / EST_TOTAL_CHUNKS) * 95));
           progressBar.style.width = pct + "%";
-
           statusText.textContent = "Streaming draft…";
+        }
+      )
+      .subscribe();
+
+    jobStatusChannel = supabaseClient
+      .channel(`job-status-${jobId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "jobs", filter: `id=eq.${jobId}` },
+        payload => {
+          const job = payload.new;
+          if (!job) return;
+          if (job.status === "error") {
+            showError("Processing error: " + (job.error || "Unknown error"));
+            progressBar.style.width = "0%";
+            statusText.textContent = "Error";
+            try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
+            try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) {}
+          } else if (job.status === "draft_complete") {
+            progressBar.style.width = "100%";
+            statusText.textContent = "Complete";
+            runButton.disabled = false;
+            setTimeout(() => {
+              try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
+              try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) {}
+            }, 2000);
+          } else if (job.status === "processing" || job.status === "draft_streaming") {
+            statusText.textContent = "Streaming draft…";
+          }
         }
       )
       .subscribe();
   }
 
-  // -----------------------------
-  // Main n8n call
-  // -----------------------------
   async function sendToN8N() {
     let url = urlInput.value.trim();
     if (!url && lastUrl) url = lastUrl;
@@ -315,14 +375,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       const rawText = await response.text().catch(() => "");
-      console.log("n8n status:", response.status);
-      console.log("n8n body:", rawText);
-
       if (!response.ok) {
-        showError(
-          "Error: n8n returned an error (HTTP " + response.status + ")",
-          rawText ? "<strong>Response body:</strong><br><pre>" + rawText + "</pre>" : ""
-        );
+        showError("Error: n8n returned an error (HTTP " + response.status + ")");
         return;
       }
 
@@ -330,22 +384,16 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         data = rawText ? JSON.parse(rawText) : {};
       } catch (e) {
-        showError(
-          "n8n responded with non‑JSON or unexpected JSON.",
-          "<strong>Raw body:</strong><br><pre>" + rawText + "</pre>"
-        );
+        showError("n8n responded with unexpected data.");
         return;
       }
 
       const item = Array.isArray(data) ? data[0] : data;
       const jobId = item.job_id;
-      const backend_url = item.backend_url;   // <— FIXED
+      const backend_url = item.backend_url;
 
       if (!backend_url || !jobId) {
-        showError(
-          "n8n responded, but the payload is missing job_id or backend_url.",
-          "<pre>" + JSON.stringify(data, null, 2) + "</pre>"
-        );
+        showError("n8n responded, but the payload is missing job_id or backend_url.");
         return;
       }
 
@@ -353,19 +401,10 @@ document.addEventListener("DOMContentLoaded", () => {
       statusChip.style.display = "inline-flex";
       statusText.textContent = "Waiting for draft stream…";
 
-      // Optional heartbeat
-      try {
-        const hb = await fetch(backend_url.replace(/\/+$/, "") + "/gateway");
-        console.log("Heartbeat:", hb.status);
-      } catch (e) {
-        console.warn("Heartbeat failed:", e);
-      }
+      try { await fetch(backend_url.replace(/\/+$/, "") + "/gateway").catch(() => {}); } catch (e) {}
 
-      // Subscribe to Supabase Realtime
       subscribeToDraft(jobId);
-
       runButton.disabled = false;
-
     } catch (err) {
       showError("Error: " + (err.message || String(err)));
     }
