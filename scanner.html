@@ -388,12 +388,14 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // Replacement for block that required backend_url
+      try {
       const item = Array.isArray(data) ? data[0] : data;
-      const jobId = item.job_id;
-      const backend_url = item.backend_url;
+      const jobId = item?.job_id;
+      const backend_url = item?.backend_url;
 
-      if (!backend_url || !jobId) {
-        showError("n8n responded, but the payload is missing job_id or backend_url.");
+      if (!jobId) {
+        showError("n8n responded, but the payload is missing job_id.");
         return;
       }
 
@@ -401,14 +403,25 @@ document.addEventListener("DOMContentLoaded", () => {
       statusChip.style.display = "inline-flex";
       statusText.textContent = "Waiting for draft stream…";
 
-      try { await fetch(backend_url.replace(/\/+$/, "") + "/gateway").catch(() => {}); } catch (e) {}
+      // Optional gateway ping: only attempt if backend_url exists
+      if (backend_url) {
+        try {
+          const url = backend_url.replace(/\/+$/, "") + "/gateway";
+          // Non-blocking best-effort ping; log failures for debugging
+          fetch(url).catch(err => {
+            console.warn("Gateway ping failed for", url, err);
+          });
+        } catch (e) {
+          console.warn("Gateway ping error:", e);
+        }
+      }
 
+      // Start realtime subscription by jobId (primary mechanism)
       subscribeToDraft(jobId);
       runButton.disabled = false;
     } catch (err) {
-      showError("Error: " + (err.message || String(err)));
+      showError("Error: " + (err?.message || String(err)));
     }
-  }
 
   function retryConnection() {
     resetUI();
