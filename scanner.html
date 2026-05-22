@@ -177,6 +177,16 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/*
+  Production-ready frontend script (replace the existing <script> body).
+  - Pulls backend_url from the n8n response if present.
+  - If missing, attempts to read backend_url from the `colab_backend` Supabase table.
+  - If still missing, proceeds using job_id only (no gateway ping).
+  - Uses the anon key only. Do NOT put a Service Role key here.
+  - Validates backend_url against a hostname whitelist before pinging to reduce SSRF risk.
+  - Non-blocking, best-effort gateway ping with logging and a short timeout.
+*/
+
 document.addEventListener("DOMContentLoaded", () => {
   const urlInput = document.getElementById("urlInput");
   const loading = document.getElementById("loading");
@@ -198,10 +208,18 @@ document.addEventListener("DOMContentLoaded", () => {
   let sectionOrderMap = {};
 
   // IMPORTANT: Use the anon key here. Do NOT paste the Service Role key in the browser.
-  const supabaseClient = window.supabase.createClient(
-    "https://plcbjxwafbphpebtmoeu.supabase.co",
-    "<ANON_KEY>"
-  );
+  // Replace the placeholders below with your actual Supabase project URL and ANON key.
+  const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
+  const SUPABASE_ANON_KEY = "<ANON_KEY>";
+
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // Hostname whitelist for backend_url to reduce SSRF risk.
+  // Add any allowed backend hostnames here (no protocol, no path).
+  const BACKEND_HOST_WHITELIST = [
+    "your-backend.example.com",
+    "n8n-scanner-jd5c.onrender.com" // add any trusted hosts you expect
+  ];
 
   function resetUI() {
     result.style.display = "none";
@@ -352,6 +370,64 @@ document.addEventListener("DOMContentLoaded", () => {
       .subscribe();
   }
 
+  // Helper: normalize various shapes of n8n response and extract jobId/backend_url
+  function normalizeN8nResponse(data) {
+    // data may be: { id: "...", job_id: "...", backend_url: "..." }
+    // or [ { ... } ]
+    // or { data: [ { ... } ] } or { body: [ { ... } ] }
+    let raw = data;
+    if (Array.isArray(raw) && raw.length > 0) raw = raw[0];
+    if (raw && raw.data) raw = Array.isArray(raw.data) ? raw.data[0] : raw.data;
+    if (raw && raw.body) raw = Array.isArray(raw.body) ? raw.body[0] : raw.body;
+    return raw || {};
+  }
+
+  // Helper: fetch backend_url from colab_backend table by job_id (returns string or null)
+  async function getBackendUrlFromColabBackend(jobId) {
+    try {
+      const { data, error } = await supabaseClient
+        .from("colab_backend")
+        .select("backend_url")
+        .eq("job_id", jobId)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        console.warn("colab_backend lookup error:", error);
+        return null;
+      }
+      if (!data) return null;
+      return data.backend_url || null;
+    } catch (e) {
+      console.warn("colab_backend lookup exception:", e);
+      return null;
+    }
+  }
+
+  // Validate backend_url against whitelist (returns boolean)
+  function isBackendUrlAllowed(urlStr) {
+    try {
+      const u = new URL(urlStr);
+      return BACKEND_HOST_WHITELIST.includes(u.hostname);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Ping with timeout (returns a Promise that resolves when done; errors are swallowed)
+  async function pingWithTimeout(url, ms = 2000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    try {
+      await fetch(url, { signal: controller.signal, mode: "no-cors" }).catch(() => {});
+    } catch (e) {
+      // ignore
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  // Main function to send URL to n8n and handle response
   async function sendToN8N() {
     let url = urlInput.value.trim();
     if (!url && lastUrl) url = lastUrl;
@@ -388,40 +464,58 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // Replacement for block that required backend_url
-      try {
-      const item = Array.isArray(data) ? data[0] : data;
-      const jobId = item?.job_id;
-      const backend_url = item?.backend_url;
+      // Normalize and extract jobId and backend_url
+      const normalized = normalizeN8nResponse(data);
+      // Accept multiple possible id fields
+      const jobId = normalized?.job_id || normalized?.id || normalized?.jobId || null;
+      let backend_url = normalized?.backend_url || normalized?.backendUrl || normalized?.backend || null;
 
       if (!jobId) {
+        // If no jobId present, log full response for debugging and show error
+        console.error("n8n response (full):", data);
         showError("n8n responded, but the payload is missing job_id.");
         return;
+      }
+
+      // If backend_url missing from n8n response, attempt to fetch from colab_backend table
+      if (!backend_url) {
+        try {
+          backend_url = await getBackendUrlFromColabBackend(jobId);
+          if (backend_url) console.info("Resolved backend_url from colab_backend for job", jobId);
+        } catch (e) {
+          console.warn("Failed to resolve backend_url from colab_backend:", e);
+          backend_url = null;
+        }
       }
 
       loading.textContent = "Audit started…";
       statusChip.style.display = "inline-flex";
       statusText.textContent = "Waiting for draft stream…";
 
-      // Optional gateway ping: only attempt if backend_url exists
-      if (backend_url) {
+      // Optional gateway ping: only attempt if backend_url exists and is allowed
+      if (backend_url && isBackendUrlAllowed(backend_url)) {
         try {
-          const url = backend_url.replace(/\/+$/, "") + "/gateway";
-          // Non-blocking best-effort ping; log failures for debugging
-          fetch(url).catch(err => {
-            console.warn("Gateway ping failed for", url, err);
+          const pingUrl = backend_url.replace(/\/+$/, "") + "/gateway";
+          // Non-blocking best-effort ping; do not await long
+          pingWithTimeout(pingUrl, 2000).catch(err => {
+            console.warn("Gateway ping failed for", pingUrl, err);
           });
         } catch (e) {
           console.warn("Gateway ping error:", e);
         }
+      } else if (backend_url) {
+        // backend_url present but not allowed by whitelist
+        console.warn("backend_url present but not allowed by whitelist:", backend_url);
       }
 
       // Start realtime subscription by jobId (primary mechanism)
       subscribeToDraft(jobId);
       runButton.disabled = false;
     } catch (err) {
+      console.error("sendToN8N error:", err);
       showError("Error: " + (err?.message || String(err)));
     }
+  }
 
   function retryConnection() {
     resetUI();
@@ -430,6 +524,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendToN8N();
   }
 
+  // Expose functions to window for buttons
   window.sendToN8N = sendToN8N;
   window.retryConnection = retryConnection;
 });
