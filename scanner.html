@@ -345,7 +345,7 @@
 
                 typeTextIntoElement(p, newBuffer);
                 result.scrollTop = result.scrollHeight;
-                }
+            }
 
 
             function subscribeToDraft(jobId) {
@@ -437,6 +437,37 @@
                     )
                     .subscribe();
             }
+
+            jobStatusChannel = supabaseClient
+                .channel(`job-status-${jobId}`)
+                .on(
+                    "postgres_changes",
+                    { event: "UPDATE", schema: "public", table: "jobs", filter: `id=eq.${jobId}` },
+                    payload => {
+                        const job = payload.new;
+                        if (!job) return;
+                        if (job.status === "error") {
+                            showError("Processing error: " + (job.error || "Unknown error"));
+                            progressBar.style.width = "0%";
+                            statusText.textContent = "Error";
+                            try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
+                            try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) { }
+                        } else if (job.status === "draft_complete") {
+                            progressBar.style.width = "100%";
+                            statusText.textContent = "Complete";
+                            runButton.disabled = false;
+                            setTimeout(() => {
+                                try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
+                                try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) { }
+                            }, 2000);
+                        } else if (job.status === "processing" || job.status === "draft_streaming") {
+                            statusText.textContent = "Streaming draft…";
+                        }
+                    }
+                )
+                .subscribe();
+            }
+
   // Helper: normalize various shapes of n8n response and extract jobId/backend_url
   function normalizeN8nResponse(data) {
                 // data may be: { id: "...", job_id: "...", backend_url: "..." }
