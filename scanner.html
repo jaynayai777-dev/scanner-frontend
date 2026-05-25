@@ -254,10 +254,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function appendChunkToUI(section, content, order_index = null, jobId = null) {
+    // Fallback if worker did not provide a section
+    if (!section) section = "report";
+
     result.style.display = "block";
     const sectionId = `sec-${section}`;
     let sectionDiv = document.getElementById(sectionId);
 
+    // Create section container if it doesn't exist
     if (!sectionDiv) {
       sectionDiv = document.createElement("div");
       sectionDiv.id = sectionId;
@@ -272,11 +276,14 @@ document.addEventListener("DOMContentLoaded", () => {
       contentWrapper.className = "report-section-body";
       sectionDiv.appendChild(contentWrapper);
 
+      // Handle ordering if order_index is provided
       if (order_index !== null && jobId) {
         sectionOrderMap[jobId] = sectionOrderMap[jobId] || {};
         sectionOrderMap[jobId][section] = order_index;
+
         const siblings = Array.from(result.querySelectorAll(".report-section"));
         let inserted = false;
+
         for (let s of siblings) {
           const sid = s.id.replace(/^sec-/, "");
           const idx = sectionOrderMap[jobId][sid];
@@ -286,17 +293,20 @@ document.addEventListener("DOMContentLoaded", () => {
             break;
           }
         }
+
         if (!inserted) result.appendChild(sectionDiv);
       } else {
         result.appendChild(sectionDiv);
       }
     }
 
-    const body = sectionDiv.querySelector(".report-section-body") || sectionDiv.appendChild(document.createElement("div"));
+    // Append chunk content
+    const body = sectionDiv.querySelector(".report-section-body");
     const p = document.createElement("p");
     p.className = "report-paragraph";
     body.appendChild(p);
 
+    // Buffering for typewriter effect
     const bufferKey = sectionId;
     chunkBuffers[bufferKey] = chunkBuffers[bufferKey] || "";
     const newBuffer = (chunkBuffers[bufferKey] + content).trim();
@@ -306,7 +316,9 @@ document.addEventListener("DOMContentLoaded", () => {
     result.scrollTop = result.scrollHeight;
   }
 
+
   function subscribeToDraft(jobId) {
+    // Clean up old channels
     if (currentChannel) {
       try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
       currentChannel = null;
@@ -323,15 +335,28 @@ document.addEventListener("DOMContentLoaded", () => {
     chunkCounts[jobId] = 0;
     sectionOrderMap[jobId] = {};
 
+    // MAIN REALTIME SUBSCRIPTION
     currentChannel = supabaseClient
       .channel(`job-${jobId}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "draft_chunks", filter: `job_id=eq.${jobId}` },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "draft_chunks",
+          filter: `job_id=eq.${jobId}`
+        },
         payload => {
+          console.log("🔥 DRAFT CHUNK RECEIVED:", payload);
+
           const chunk = payload.new;
-          const orderIndex = (typeof chunk.order_index !== "undefined") ? chunk.order_index : null;
-          appendChunkToUI("report", chunk.content, null, jobId);
+
+          // Use worker-provided section if available, otherwise fallback
+          const sectionName = chunk.section || "report";
+
+          appendChunkToUI(sectionName, chunk.content, chunk.order_index ?? null, jobId);
+
+          // Progress bar update
           chunkCounts[jobId] = (chunkCounts[jobId] || 0) + 1;
           const pct = Math.min(95, Math.round((chunkCounts[jobId] / EST_TOTAL_CHUNKS) * 95));
           progressBar.style.width = pct + "%";
@@ -339,6 +364,48 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       )
       .subscribe();
+
+    // JOB STATUS SUBSCRIPTION
+    jobStatusChannel = supabaseClient
+      .channel(`job-status-${jobId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "jobs",
+          filter: `id=eq.${jobId}`
+        },
+        payload => {
+          const job = payload.new;
+          if (!job) return;
+
+          if (job.status === "error") {
+            showError("Processing error: " + (job.error || "Unknown error"));
+            progressBar.style.width = "0%";
+            statusText.textContent = "Error";
+            try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
+            try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) {}
+          }
+
+          else if (job.status === "draft_complete") {
+            progressBar.style.width = "100%";
+            statusText.textContent = "Complete";
+            runButton.disabled = false;
+
+            setTimeout(() => {
+              try { supabaseClient.removeChannel(currentChannel); } catch (e) {}
+              try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) {}
+            }, 2000);
+          }
+
+          else if (job.status === "processing" || job.status === "draft_streaming") {
+            statusText.textContent = "Streaming draft…";
+          }
+        }
+      )
+      .subscribe();
+  }
 
     jobStatusChannel = supabaseClient
       .channel(`job-status-${jobId}`)
