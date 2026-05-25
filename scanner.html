@@ -314,7 +314,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     typeTextIntoElement(p, newBuffer);
     result.scrollTop = result.scrollHeight;
-  }
+}
 
 
   function subscribeToDraft(jobId) {
@@ -405,7 +405,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       )
       .subscribe();
-}
+  }
 
     jobStatusChannel = supabaseClient
       .channel(`job-status-${jobId}`)
