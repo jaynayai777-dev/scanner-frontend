@@ -331,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
         payload => {
           const chunk = payload.new;
           const orderIndex = (typeof chunk.order_index !== "undefined") ? chunk.order_index : null;
-          appendChunkToUI(chunk.section, chunk.content, orderIndex, jobId);
+          appendChunkToUI("report", chunk.content, null, jobId);
           chunkCounts[jobId] = (chunkCounts[jobId] || 0) + 1;
           const pct = Math.min(95, Math.round((chunkCounts[jobId] / EST_TOTAL_CHUNKS) * 95));
           progressBar.style.width = pct + "%";
