@@ -209,7 +209,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         /*
-          Production-ready frontend script (replace the existing <script> body).
+          Production-ready frontend script.
           - Pulls backend_url from the n8n response if present.
           - If missing, attempts to read backend_url from the `colab_backend` Supabase table.
           - If still missing, proceeds using job_id only (no gateway ping).
@@ -243,7 +243,9 @@
             const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
             const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8";
 
-            const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            console.log("ABOUT TO CREATE CLIENT");
+
 
             // Hostname whitelist for backend_url to reduce SSRF risk.
             // Add any allowed backend hostnames here (no protocol, no path).
@@ -284,7 +286,7 @@
                 }, speed);
             }
 
-            function appendChunkToUI(section, content, order_index = null, jobId = null) {
+            window.appendChunkToUI = function(section, content, order_index, job_id) {
                 // Fallback if worker did not provide a section
                 if (!section) section = "report";
 
@@ -308,16 +310,16 @@
                     sectionDiv.appendChild(contentWrapper);
 
                     // Handle ordering if order_index is provided
-                    if (order_index !== null && jobId) {
-                        sectionOrderMap[jobId] = sectionOrderMap[jobId] || {};
-                        sectionOrderMap[jobId][section] = order_index;
+                    if (order_index !== null && job_id) {
+                        sectionOrderMap[job_id] = sectionOrderMap[job_id] || {};
+                        sectionOrderMap[job_id][section] = order_index;
 
                         const siblings = Array.from(result.querySelectorAll(".report-section"));
                         let inserted = false;
 
                         for (let s of siblings) {
                             const sid = s.id.replace(/^sec-/, "");
-                            const idx = sectionOrderMap[jobId][sid];
+                            const idx = sectionOrderMap[job_id][sid];
                             if (typeof idx === "number" && idx > order_index) {
                                 result.insertBefore(sectionDiv, s);
                                 inserted = true;
@@ -348,7 +350,7 @@
             }
 
 
-            function subscribeToDraft(jobId) {
+            function subscribeToDraft(job_id) {
                 // Clean up old channels
                 if (currentChannel) {
                     try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
@@ -363,12 +365,12 @@
                 statusText.textContent = "Waiting for draft stream…";
                 progressContainer.style.display = "block";
                 progressBar.style.width = "5%";
-                chunkCounts[jobId] = 0;
-                sectionOrderMap[jobId] = {};
+                chunkCounts[job_id] = 0;
+                sectionOrderMap[job_id] = {};
 
                 // MAIN REALTIME SUBSCRIPTION
                 currentChannel = supabaseClient
-                    .channel(`job-${jobId}`)
+                    .channel(`job-${job_id}`)
                     .on(
                         "postgres_changes",
                         {
@@ -595,7 +597,9 @@
   window.sendToN8N = sendToN8N;
         window.retryConnection = retryConnection;
 });
-    </script>
+
+</script>
+
 </body>
 
 </html>
