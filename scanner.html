@@ -218,6 +218,89 @@
           - Non-blocking, best-effort gateway ping with logging and a short timeout.
         */
 
+        // ----------------------------
+        // Supabase client + realtime (Kevlar)
+        // ----------------------------
+        const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8";
+
+        // 1) Create the client globally
+        window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        console.log("Supabase client created:", !!window.supabaseClient);
+
+        // 2) Global realtime state
+        window.streamChannel = null;
+        window.lastStreamAt = null;
+
+        // Helper: attach a realtime channel for a given job_id
+        window.attachStreamChannel = function attachStreamChannel(jobId, onChunk) {
+          if (!window.supabaseClient) {
+            console.error("Supabase client not initialized");
+            return;
+          }
+          if (!jobId) {
+            console.error("attachStreamChannel called without jobId");
+            return;
+          }
+          
+          // Clean up any previous channel
+          if (window.streamChannel) {
+            try {
+              window.streamChannel.unsubscribe();
+            } catch (e) {
+              console.warn("Error unsubscribing previous channel:", e);
+            }
+          }
+
+          console.log("Creating realtime channel for job:", jobId);
+
+          const channel = window.supabaseClient.channel(`job_stream_${jobId}`);
+          window.streamChannel = channel;
+          window.lastStreamAt = Date.now();
+
+          // Listen for new chunks for this job
+          channel.on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "draft_chunks",
+              filter: `job_id=eq.${jobId}`
+            },
+              (payload) => {
+              console.log("Realtime chunk received:", payload);
+              window.lastStreamAt = Date.now();
+              if (typeof onChunk === "function") {
+                onChunk(payload);
+              }
+            }
+          );
+
+          // Auto‑reconnect on drop
+          channel.subscribe((status) => {
+            console.log("Realtime channel status:", status);
+            if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+              console.warn("Realtime dropped — reconnecting in 2s…");
+              setTimeout(() => {
+                window.attachStreamChannel(jobId, onChunk);
+              }, 2000);
+            }
+          });
+        };
+
+        // Heartbeat watchdog: warn if no chunks for 30s
+        setInterval(() => {
+          if (!window.lastStreamAt) return;
+          const silenceMs = Date.now() - window.lastStreamAt;
+          if (silenceMs > 30000) {
+            console.warn("No realtime chunks for", Math.round(silenceMs / 1000), "seconds");
+          }
+        }, 10000);
+
+
+        // ----------------------------
+        // DOM + UI logic
+        // ----------------------------
         document.addEventListener("DOMContentLoaded", () => {
             const urlInput = document.getElementById("urlInput");
             const loading = document.getElementById("loading");
@@ -240,11 +323,11 @@
 
             // IMPORTANT: Use the anon key here. Do NOT paste the Service Role key in the browser.
             // Replace the placeholders below with your actual Supabase project URL and ANON key.
-            const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
-            const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8";
+            // const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
+            // const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8";
 
-            window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-            console.log("ABOUT TO CREATE CLIENT");
+            // window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            // console.log("ABOUT TO CREATE CLIENT");
 
 
             // Hostname whitelist for backend_url to reduce SSRF risk.
