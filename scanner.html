@@ -313,27 +313,29 @@
             // ----------------------------
             // Realtime Subscription
             // ----------------------------
-            async function startJob(url) {
+            async function startJob(jobId, url) {
+              console.log("Creating realtime channel for job:", jobId);
+
               // 1. Reset UI
               result.innerHTML = "";
               progressBar.style.width = "0%";
               statusText.textContent = "Starting…";
 
               // 2. Create job in backend
-              const { data, error } = await window.supabaseClient
-                .from("colab_backend")
-                .insert({ url })
-                .select()
-                .single();
+              //const { data, error } = await window.supabaseClient
+              //.from("colab_backend")
+              //.insert({ url })
+              //.select()
+              //.single();
 
-              if (error || !data) {
-                console.error("Failed to create job:", error);
-                statusText.textContent = "Error creating job";
-                return;
-              }
+              //if (error || !data) {
+                //console.error("Failed to create job:", error);
+                //statusText.textContent = "Error creating job";
+                //return;
+              //}
 
-              const jobId = data.id;
-              console.log("Job created:", jobId);
+              //const jobId = data.id;
+              //console.log("Job created:", jobId);
 
               // 3. Reset chunk buffers
               chunkCounts = {};
@@ -620,7 +622,7 @@
                     }
 
                     // Start realtime subscription by jobId (primary mechanism)
-                    startJob(url);
+                    startJob(jobId, url);
                     runButton.disabled = false;
                 } catch (err) {
                     console.error("sendToN8N error:", err);
