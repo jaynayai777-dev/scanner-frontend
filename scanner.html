@@ -313,25 +313,76 @@
             const progressBar = document.getElementById("progressBar");
 
             let lastUrl = "";
-            let currentChannel = null;
             let jobStatusChannel = null;
             const CHUNK_TYPING_SPEED = 6;
             const EST_TOTAL_CHUNKS = 22;
             let chunkCounts = {};
             let chunkBuffers = {};
             let sectionOrderMap = {};
+    
+            // ----------------------------
+            // Realtime Subscription
+            // ----------------------------
+            async function startJob(url) {
+              // 1. Reset UI
+              result.innerHTML = "";
+              progressBar.style.width = "0%";
+              statusText.textContent = "Starting…";
 
-            // IMPORTANT: Use the anon key here. Do NOT paste the Service Role key in the browser.
-            // Replace the placeholders below with your actual Supabase project URL and ANON key.
-            // const SUPABASE_URL = "https://plcbjxwafbphpebtmoeu.supabase.co";
-            // const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsY2JqeHdhZmJwaHBlYnRtb2V1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODE4NzEsImV4cCI6MjA5NDQ1Nzg3MX0.Rz4Cq55UirZnuMLP_BfzbweyYu_Gwmxl4y9GiMZyeY8";
+              // 2. Create job in backend
+              const { data, error } = await window.supabaseClient
+                .from("colab_backend")
+                .insert({ url })
+                .select()
+                .single();
 
-            // window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-            // console.log("ABOUT TO CREATE CLIENT");
+              if (error || !data) {
+                console.error("Failed to create job:", error);
+                statusText.textContent = "Error creating job";
+                return;
+              }
 
+              const jobId = data.id;
+              console.log("Job created:", jobId);
 
-            // Hostname whitelist for backend_url to reduce SSRF risk.
-            // Add any allowed backend hostnames here (no protocol, no path).
+              // 3. Reset chunk buffers
+              chunkCounts = {};
+              chunkBuffers = {};
+              sectionOrderMap = {};
+
+              // 4. Attach realtime streaming channel (Kevlar)
+              window.attachStreamChannel(jobId, (payload) => {
+                const row = payload.new;
+                appendChunkToUI(row.section, row.content, row.order_index, row.job_id);
+              });
+
+              // 5. (Optional) Attach job status channel
+              if (jobStatusChannel) {
+                jobStatusChannel.unsubscribe();
+              }
+              jobStatusChannel = window.supabaseClient
+                .channel(`job_status_${jobId}`)
+                .on(
+                  "postgres_changes",
+                  {
+                    event: "UPDATE",
+                    schema: "public",
+                    table: "jobs",
+                    filter: `id=eq.${jobId}`
+                  },
+                  (payload) => {
+                    const newStatus = payload.new.status;
+                    console.log("Job status update:", newStatus);
+                    statusText.textContent = newStatus;
+                  }
+                )
+                .subscribe();
+
+              // 6. Kick off backend processing (if needed)
+              // fetch(`/api/start-job?jobId=${jobId}`);
+              }
+            
+
             const BACKEND_HOST_WHITELIST = [
                 "your-backend.example.com",
                 "n8n-scanner-jd5c.onrender.com" // add any trusted hosts you expect
@@ -432,110 +483,22 @@
                 result.scrollTop = result.scrollHeight;
             }
 
-
-            function subscribeToDraft(job_id) {
-                // Clean up old channels
-                if (currentChannel) {
-                    try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
-                    currentChannel = null;
-                }
-                if (jobStatusChannel) {
-                    try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) { }
-                    jobStatusChannel = null;
-                }
-
-                statusChip.style.display = "inline-flex";
-                statusText.textContent = "Waiting for draft stream…";
-                progressContainer.style.display = "block";
-                progressBar.style.width = "5%";
-                chunkCounts[job_id] = 0;
-                sectionOrderMap[job_id] = {};
-
-                // MAIN REALTIME SUBSCRIPTION
-                currentChannel = supabaseClient
-                    .channel(`job-${job_id}`)
-                    .on(
-                        "postgres_changes",
-                        {
-                            event: "INSERT",
-                            schema: "public",
-                            table: "draft_chunks",
-                            filter: `job_id=eq.${jobId}`
-                        },
-                        payload => {
-                            console.log("🔥 DRAFT CHUNK RECEIVED:", payload);
-
-                            const chunk = payload.new;
-
-                            // Use worker-provided section if available, otherwise fallback
-                            const sectionName = chunk.section || "report";
-
-                            appendChunkToUI(sectionName, chunk.content, chunk.order_index ?? null, jobId);
-
-                            // Progress bar update
-                            chunkCounts[jobId] = (chunkCounts[jobId] || 0) + 1;
-                            const pct = Math.min(95, Math.round((chunkCounts[jobId] / EST_TOTAL_CHUNKS) * 95));
-                            progressBar.style.width = pct + "%";
-                            statusText.textContent = "Streaming draft…";
-                        }
-                    )
-                    .subscribe();
-
-                // JOB STATUS SUBSCRIPTION
-                jobStatusChannel = supabaseClient
-                    .channel(`job-status-${jobId}`)
-                    .on(
-                        "postgres_changes",
-                        {
-                            event: "UPDATE",
-                            schema: "public",
-                            table: "jobs",
-                            filter: `id=eq.${jobId}`
-                        },
-                        payload => {
-                            const job = payload.new;
-                            if (!job) return;
-
-                            if (job.status === "error") {
-                                showError("Processing error: " + (job.error || "Unknown error"));
-                                progressBar.style.width = "0%";
-                                statusText.textContent = "Error";
-                                try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
-                                try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) { }
-                            }
-
-                            else if (job.status === "draft_complete") {
-                                progressBar.style.width = "100%";
-                                statusText.textContent = "Complete";
-                                runButton.disabled = false;
-
-                                setTimeout(() => {
-                                    try { supabaseClient.removeChannel(currentChannel); } catch (e) { }
-                                    try { supabaseClient.removeChannel(jobStatusChannel); } catch (e) { }
-                                }, 2000);
-                            }
-
-                            else if (job.status === "processing" || job.status === "draft_streaming") {
-                                statusText.textContent = "Streaming draft…";
-                            }
-                        }
-                    )
-                    .subscribe();
-            }
-  // Helper: normalize various shapes of n8n response and extract jobId/backend_url
-  function normalizeN8nResponse(data) {
-                // data may be: { id: "...", job_id: "...", backend_url: "..." }
-                // or [ { ... } ]
-                // or { data: [ { ... } ] } or { body: [ { ... } ] }
+            
+            // ----------------------------
+            // Helper: normalize n8n response
+            // ----------------------------
+            function normalizeN8nResponse(data) {
                 let raw = data;
                 if (Array.isArray(raw) && raw.length > 0) raw = raw[0];
                 if (raw && raw.data) raw = Array.isArray(raw.data) ? raw.data[0] : raw.data;
                 if (raw && raw.body) raw = Array.isArray(raw.body) ? raw.body[0] : raw.body;
                 return raw || {};
             }
-
-  // Helper: fetch backend_url from colab_backend table by job_id (returns string or null)
-  async function getBackendUrlFromColabBackend(jobId) {
+            
+            // ----------------------------
+            // Helper: fetch backend_url from Supabase
+            // ----------------------------
+            async function getBackendUrlFromColabBackend(jobId) {
                 try {
                     const { data, error } = await supabaseClient
                         .from("colab_backend")
@@ -555,9 +518,11 @@
                     return null;
                 }
             }
-
-  // Validate backend_url against whitelist (returns boolean)
-  function isBackendUrlAllowed(urlStr) {
+            
+            // ----------------------------
+            // Helper: whitelist check
+            // ----------------------------
+            function isBackendUrlAllowed(urlStr) {
                 try {
                     const u = new URL(urlStr);
                     return BACKEND_HOST_WHITELIST.includes(u.hostname);
@@ -565,9 +530,11 @@
                     return false;
                 }
             }
-
-  // Ping with timeout (returns a Promise that resolves when done; errors are swallowed)
-  async function pingWithTimeout(url, ms = 2000) {
+            
+            // ----------------------------
+            // Helper: ping with timeout
+            // ----------------------------
+            async function pingWithTimeout(url, ms = 2000) {
                 const controller = new AbortController();
                 const id = setTimeout(() => controller.abort(), ms);
                 try {
@@ -578,9 +545,11 @@
                     clearTimeout(id);
                 }
             }
-
-  // Main function to send URL to n8n and handle response
-  async function sendToN8N() {
+            
+            // ----------------------------
+            // Main function: sendToN8N
+            // ----------------------------
+            async function sendToN8N() {
                 let url = urlInput.value.trim();
                 if (!url && lastUrl) url = lastUrl;
 
@@ -661,7 +630,7 @@
                     }
 
                     // Start realtime subscription by jobId (primary mechanism)
-                    subscribeToDraft(jobId);
+                    startJob(url);
                     runButton.disabled = false;
                 } catch (err) {
                     console.error("sendToN8N error:", err);
