@@ -254,17 +254,27 @@
 
           console.log("Creating realtime channel for job:", jobId);
 
-          const channel = window.supabaseClient.channel(`job_stream_${jobId}`);
+          const channel = window.supabaseClient
+            .channel(`job_stream_${jobId}`)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "draft_chunks",
+                filter: `job_id=eq.${jobId}`
+              },
+              (payload) => {
+                console.log("Realtime chunk received:", payload);
+                window.lastStreamAt = Date.now();
+                if (typeof onChunk === "function") {
+                  onChunk(payload);
+                }
+              }
+            );
+
           window.streamChannel = channel;
           window.lastStreamAt = Date.now();
-
-              (payload) => {
-              console.log("Realtime chunk received:", payload);
-              window.lastStreamAt = Date.now();
-              if (typeof onChunk === "function") {
-                onChunk(payload);
-              }
-            }
 
           // Auto‑reconnect on drop
           channel.subscribe((status) => {
@@ -321,34 +331,18 @@
               progressBar.style.width = "0%";
               statusText.textContent = "Starting…";
 
-              // 2. Create job in backend
-              //const { data, error } = await window.supabaseClient
-              //.from("colab_backend")
-              //.insert({ url })
-              //.select()
-              //.single();
-
-              //if (error || !data) {
-                //console.error("Failed to create job:", error);
-                //statusText.textContent = "Error creating job";
-                //return;
-              //}
-
-              //const jobId = data.id;
-              //console.log("Job created:", jobId);
-
-              // 3. Reset chunk buffers
+              // 2. Reset chunk buffers
               chunkCounts = {};
               chunkBuffers = {};
               sectionOrderMap = {};
 
-              // 4. Attach realtime streaming channel (Kevlar)
+              // 3. Attach realtime streaming channel (Kevlar)
               window.attachStreamChannel(jobId, (payload) => {
                 const row = payload.new;
                 appendChunkToUI(row.section, row.content, row.order_index, row.job_id);
               });
 
-              // 5. (Optional) Attach job status channel
+              // 4. (Optional) Attach job status channel
               if (jobStatusChannel) {
                 jobStatusChannel.unsubscribe();
               }
@@ -370,7 +364,7 @@
                 )
                 .subscribe();
 
-              // 6. Kick off backend processing (if needed)
+              // 5. Kick off backend processing (if needed)
               // fetch(`/api/start-job?jobId=${jobId}`);
               }
             
@@ -581,6 +575,18 @@
                     const normalized = normalizeN8nResponse(data);
                     // Accept multiple possible id fields
                     const jobId = normalized?.job_id || normalized?.id || normalized?.jobId || null;
+                    // Map colab_backend jobId → jobs table UUID
+                    const { data: jobRow } = await supabaseClient
+                      .from("jobs")
+                      .select("id")
+                      .eq("colab_backend_id", jobId)
+                      .maybeSingle();
+
+                    const finalJobId = jobRow?.id || jobId;
+                    
+                    // Start realtime subscription using the correct jobId
+                    startJob(finalJobId, url);
+
                     let backend_url = normalized?.backend_url || normalized?.backendUrl || normalized?.backend || null;
 
                     if (!jobId) {
