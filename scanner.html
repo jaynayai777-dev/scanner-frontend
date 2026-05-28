@@ -273,6 +273,8 @@
               }
             );
 
+          console.log("CHUNK EVENT FIRED:", payload);
+          console.log("Payload structure:", payload);
           window.streamChannel = channel;
           window.lastStreamAt = Date.now();
 
@@ -392,6 +394,7 @@
                 retryButton.style.display = "inline-block";
                 runButton.disabled = false;
             }
+            console.log("Appending to:", result);
 
             function typeTextIntoElement(el, text, speed = CHUNK_TYPING_SPEED) {
                 let existing = el.textContent || "";
@@ -405,9 +408,9 @@
                     if (i >= remaining.length) clearInterval(t);
                 }, speed);
             }
+            
 
             window.appendChunkToUI = function(section, content, order_index, job_id) {
-                // Fallback if worker did not provide a section
                 if (!section) section = "report";
 
                 result.style.display = "block";
@@ -439,8 +442,10 @@
 
                         for (let s of siblings) {
                             const sid = s.id.replace(/^sec-/, "");
-                            const idx = sectionOrderMap[job_id][sid];
-                            if (typeof idx === "number" && idx > order_index) {
+                            const siblingIndex = sectionOrderMap[job_id][sid];
+                            
+                            // Insert BEFORE the first sibling with a HIGHER index
+                            if (typeof siblingIndex === "number" && siblingIndex > order_index) {
                                 result.insertBefore(sectionDiv, s);
                                 inserted = true;
                                 break;
@@ -453,19 +458,22 @@
                     }
                 }
 
-                // Append chunk content
+                // Append chunk content (Get the section body)
                 const body = sectionDiv.querySelector(".report-section-body");
-                const p = document.createElement("p");
-                p.className = "report-paragraph";
-                body.appendChild(p);
-
-                // Buffering for typewriter effect
-                const bufferKey = sectionId;
-                chunkBuffers[bufferKey] = chunkBuffers[bufferKey] || "";
-                const newBuffer = (chunkBuffers[bufferKey] + content).trim();
-                chunkBuffers[bufferKey] = newBuffer;
-
-                typeTextIntoElement(p, newBuffer);
+                
+                // Reuse ONE <p> per section
+                let p = body.querySelector("p");
+                if (!p) {
+                    p = document.createElement("p");
+                    p.className = "report-paragraph";
+                    body.appendChild(p);
+                }
+                // Building the next full text + the typewriter animation
+                const nextText = (p.textContent || "") + content;
+                typeTextIntoElement(p, nextText);
+                
+                // Smooth scrolling
+                p.scrollIntoView({ behavior: "smooth", block: "end" });
                 result.scrollTop = result.scrollHeight;
             }
 
