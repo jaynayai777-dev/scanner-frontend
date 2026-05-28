@@ -242,13 +242,13 @@
             console.error("attachStreamChannel called without jobId");
             return;
           }
-          
-          // Clean up any previous channel
+
+          // Clean up previous channel
           if (window.streamChannel) {
             try {
-              window.streamChannel.unsubscribe();
+            window.streamChannel.unsubscribe();
             } catch (e) {
-              console.warn("Error unsubscribing previous channel:", e);
+            console.warn("Error unsubscribing previous channel:", e);
             }
           }
 
@@ -273,12 +273,10 @@
               }
             );
 
-          console.log("CHUNK EVENT FIRED:", payload);
-          console.log("Payload structure:", payload);
           window.streamChannel = channel;
           window.lastStreamAt = Date.now();
 
-          // Auto‑reconnect on drop
+          // Auto‑reconnect
           channel.subscribe((status) => {
             console.log("Realtime channel status:", status);
             if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
@@ -344,7 +342,7 @@
                 appendChunkToUI(row.section, row.content, row.order_index, row.job_id);
               });
 
-              // 4. (Optional) Attach job status channel
+              // 4. Attach job status channel
               if (jobStatusChannel) {
                 jobStatusChannel.unsubscribe();
               }
