@@ -585,7 +585,7 @@
                     const { data: jobRow } = await supabaseClient
                       .from("jobs")
                       .select("id")
-                      .eq("colab_backend_id", jobId)
+                      .eq("id", jobId)
                       .maybeSingle();
 
                     const finalJobId = jobRow?.id || jobId;
